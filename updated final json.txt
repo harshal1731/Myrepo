@@ -1,0 +1,118 @@
+
+{
+  "vendor_file_name": "<invoice_file_name> and Vendor name ",
+  "status": "Ready to Post", or Review If we got all the fields we will keep status to ready to post otherwise Review
+  "etl_data": {
+    "PROPERTY": "Check master json in properties you will find data extract site code its acutually means yardi code with the help or mapping of PropertyName1 or PropertyName2 or Sitename",
+    "PERSON": "Check master json in vendors section extract RegisteredName Which means Person with help of TradingName which means vendor name ",
+    "OFFSET": "Extract newcashaccount based on this json 
+[
+  {
+    "entity": "GS Netherlands Bright C.V.",
+    "yardiAccountName": "Netherlands Bright Opex",
+    "yardiCode": "nlodrb-o",
+    "newCashAccount": "11021-000"
+  },
+  {
+    "entity": "GS Netherland AMC Student C.V.",
+    "yardiAccountName": "Netherlands AMC Student Opex",
+    "yardiCode": "nlamc2-o",
+    "newCashAccount": "11021-000"
+  },
+  {
+    "entity": "GS Netherland CDZ Parking C.V.",
+    "yardiAccountName": "Netherlands CDZ Parking Opex",
+    "yardiCode": "nlcdp2-o",
+    "newCashAccount": "11020-000"
+  },
+  {
+    "entity": "GS Netherland AMC C.V.",
+    "yardiAccountName": "Netherlands AMC Opex",
+    "yardiCode": "amcc2-o",
+    "newCashAccount": "11021-000"
+  },
+  {
+    "entity": "GS Netherlands CDZ C.V.",
+    "yardiAccountName": "Netherlands CDZ Opex",
+    "yardiCode": "cdre2-o",
+    "newCashAccount": "11020-000"
+  },
+  {
+    "entity": "GS Netherlands CDZ - R Propco C.V.",
+    "yardiAccountName": "GS Netherlands CDZ-R Propco CV",
+    "yardiCode": "cdrprp-o",
+    "newCashAccount": "11020-000"
+  },
+  {
+    "entity": "GS Netherlands CDZ Expansion C.V.",
+    "yardiAccountName": "Netherlands CDZ Expansion Opex",
+    "yardiCode": "cdzx2-o",
+    "newCashAccount": "11021-000"
+  },
+  {
+    "entity": "Orange House ZC 2015 C.V.",
+    "yardiAccountName": "",
+    "yardiCode": "gsoh-op",
+    "newCashAccount": "11022-000"
+  },
+  {
+    "entity": "GS Netherlands Onsite Manco B.V.",
+    "yardiAccountName": "",
+    "yardiCode": "nlman-o",
+    "newCashAccount": "11021-000"
+  }
+]this data  you have to store keep anywhere default and pick newCashAccount based on sitename(Entity) on master json or site code (yardiCode)",
+    "DUEDATE": "From Face of Invoice, If not provided, then 30 days from invoice date",
+    "DATE": " this 01/11/2025 if invoice date is not mentioned otherwise invoice date",
+    "POSTMONTH": "this 12/2025 if post month is not mentioned otherwise postmonth",
+    "ACCRUAL": "21010000",
+    "REF": "It should be Invoice Number",
+    "SEGMENT1": "NA",
+    "SEGMENT2": "NA",
+    "SEGMENT3": "NA",
+    "SEGMENT4": "NA",
+    "SEGMENT5": "NA",
+    "SEGMENT6": "NA",
+    "SEGMENT7": "NA",
+    "SEGMENT8": "NA",
+    "SEGMENT9": "NA",
+    "SEGMENT10": "NA",
+    "SEGMENT11": "NA",
+    "SEGMENT12": "NA",
+    "EXCHANGERATE": "NA",
+    "EXCHANGERATEDATE": "NA",
+    "TAXAMOUNT1": "NA",
+    "TAXAMOUNT2": "NA",
+    "FROMDATE": " 01/11/2025 Taken from invoice description and if missing then consider invoice date",
+    "TODATE": " 30/11/2025 Taken from invoice description and if missing then consider invoice date",
+    "EXPENSETYPE": "Expense (Opex)",
+    "DETAILNOTES": "This has to be description from invoice"
+    "DISPLAYTYPE": "NLVatApplicablePayable",
+    "ISCONSOLIDATECHECKS": -1,
+    "DETAILVATTRANTYPEID": "apresex",
+    "DETAILVATRATEID": "Uksr",
+    "INTERNATIONALPAYMENTTYPE": "Cheque / EFT  Always has to be check as per expense distribution report
+If the currency is other than Euro, the payment type should be set as Cheque. Additionally, if the UK IBAN starts with ‘GB’, the payment type should also be Cheque. In all other cases, the payment type should be EFT",
+    "InvoiceItems": [
+      {
+        "TRANNUM": "
+Exception: For Jumbo Supermarkaten BV vendor, the ETL file will always have multiple lines, even if the GL is the same, due to different VAT codes.
+Note: A few entities have been sold, and their invoice volumes will decrease starting April ’26. These entities are highlighted in orange in the Property Master Tracker tab.",
+        "ACCOUNT": "Refer to the Expense Distribution tab. Using the combination of vendor code (Yardi code) and vendor name, identify the appropriate GL and update the details accordingly.
+In cases where multiple GLs are available, refer to the notes/description on the invoice and select the GL with the highest match percentage.",
+        "NOTES": "Notes have to be taken from expense distributuion report basis the keyword from invoice and GL",
+        "AMOUNT": "The total invoice amount, including VAT, should be entered on the first screen in Yardi. In the Details tab, the net amount and VAT must be recorded separately, provided these values are specified on the invoice (refer to the snapshot).
+So far, no cases have been observed by the operations team where any previous credit or debit amount has been added to or deducted from the invoice, or where any adjustments are required.",
+        "DETAILTAXAMOUNT1": This will be the VAT / tax amount from the invoice
+      }
+    ]
+  }
+}
+
+when you have to extract and mapping please remember from master json or expense report 
+site code = yardi code 
+TradingName = vendor name
+RegisteredName =  Person
+
+
+
