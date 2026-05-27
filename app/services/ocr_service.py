@@ -333,7 +333,9 @@ def _iban_from_text(text: str) -> str:
             return candidate
 
     match = re.search(
-        r"\b(?:NL|GB|DE|FR|BE|ES|IT|IE|LU)\d{2}(?:\s?[A-Z0-9]){11,30}\b",
+        r"\bNL\d{2}\s?[A-Z]{4}(?:\s?\d){10}\b|"
+        r"\bGB\d{2}\s?[A-Z]{4}(?:\s?\d){14}\b|"
+        r"\b(?:DE|FR|BE|ES|IT|IE|LU)\d{2}(?:\s?[A-Z0-9]){11,26}\b",
         text or "",
         re.IGNORECASE,
     )
@@ -359,6 +361,98 @@ def _clean_ocr_lines(text: str) -> list[str]:
     ]
 
 
+_MONEY_PATTERN = re.compile(
+    r"\(?[-+]?(?:[A-Z]{3}|[^\w\s])?\s*\d{1,3}(?:[.,]\d{3})*[.,]\d{2}\)?",
+    re.IGNORECASE,
+)
+_DATE_TEXT_PATTERN = re.compile(
+    r"\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|"
+    r"\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|"
+    r"\d{4}[./-]\d{1,2}[./-]\d{1,2}",
+)
+_KNOWN_LABEL_PATTERNS = (
+    r"klantnr\.?",
+    r"factuur\s*nr\.?",
+    r"factuurnummer",
+    r"factuurdatum",
+    r"vervaldatum",
+    r"orderdatum",
+    r"order\s*nr\.?",
+    r"nummer",
+    r"nr\.?",
+    r"artikel\s*nr\.?",
+    r"datum",
+    r"omschrijving",
+    r"beschrijving",
+    r"aantal",
+    r"aantal/\s*eenh\.?",
+    r"quantity",
+    r"amount(?:\s+[A-Z]{3})?",
+    r"rate",
+    r"bedrag",
+    r"prijs/\s*eenh\.?",
+    r"netto\s+prijs",
+    r"korting-\s*bedrag",
+    r"stukprijs",
+    r"btw\s*%",
+    r"btw",
+    r"vat",
+    r"vat\s+amount(?:\s+[A-Z]{3})?",
+    r"btw-bedrag",
+    r"totaal",
+    r"totaal\s+nettobedrag",
+    r"totaal\s+excl\.?\s+btw",
+    r"gesplitste/btw\s*-?code",
+    r"btw\s+bedrag",
+    r"totaal\s+incl\.?\s+btw",
+    r"totale\s+btw",
+    r"totaalbedrag",
+    r"netto\s+totaal",
+)
+
+
+def _amounts_in_text(text: str) -> list[float]:
+    return [_safe_float(match.group(0)) for match in _MONEY_PATTERN.finditer(text or "")]
+
+
+def _first_date_text(text: str) -> str | None:
+    match = _DATE_TEXT_PATTERN.search(text or "")
+    return match.group(0) if match else None
+
+
+def _is_known_label(line: str) -> bool:
+    clean = str(line or "").strip(" :")
+    return any(re.fullmatch(pattern, clean, re.IGNORECASE) for pattern in _KNOWN_LABEL_PATTERNS)
+
+
+def _label_block_value(lines: list[str], label_patterns: tuple[str, ...]) -> str | None:
+    targets = [re.compile(pattern, re.IGNORECASE) for pattern in label_patterns]
+    for start in range(len(lines)):
+        if not _is_known_label(lines[start]):
+            continue
+
+        labels: list[str] = []
+        index = start
+        while index < len(lines) and len(labels) < 12 and _is_known_label(lines[index]):
+            labels.append(lines[index])
+            index += 1
+
+        if not labels:
+            continue
+
+        for label_index, label in enumerate(labels):
+            if not any(pattern.search(label) for pattern in targets):
+                continue
+
+            value_index = index + label_index
+            if value_index < len(lines):
+                return lines[value_index]
+
+            if len(labels) == 1 and index < len(lines):
+                return lines[index]
+    return None
+
+
 def _value_after_label(lines: list[str], label_pattern: str) -> str | None:
     pattern = re.compile(label_pattern, re.IGNORECASE)
     for index, line in enumerate(lines):
@@ -375,29 +469,53 @@ def _value_after_label(lines: list[str], label_pattern: str) -> str | None:
 
 
 def _raw_invoice_number(lines: list[str]) -> str | None:
-    value = _value_after_label(lines, r"\binvoice\s*(?:number|no\.?|#)\b|\bfactuurnummer\b|\bnummer\b")
+    value = _label_block_value(
+        lines,
+        (
+            r"\binvoice\s*(?:number|no\.?|#)\b",
+            r"\bfactuur\s*nr\.?\b",
+            r"\bfactuurnummer\b",
+            r"\bnummer\b",
+        ),
+    ) or _value_after_label(lines, r"\binvoice\s*(?:number|no\.?|#)\b|\bfactuurnummer\b|\bnummer\b")
     if value:
         return value
     for line in lines:
-        match = re.search(r"\b[A-Z]{1,4}\s*INV[-\s]?\d+\b|\b\d{4}\s*/\s*\d+\b|\bV\d{6,}\b", line, re.IGNORECASE)
+        match = re.search(
+            r"\bfactuur\s+([A-Z0-9][A-Z0-9 /.-]{3,})\b|"
+            r"\b[A-Z]{1,4}\s*INV[-\s]?\d+\b|"
+            r"\b\d{4}\s*/\s*\d+\b|"
+            r"\bV\d{6,}\b",
+            line,
+            re.IGNORECASE,
+        )
         if match:
-            return match.group(0).strip()
+            return (match.group(1) or match.group(0)).replace("Kenmerk", "").strip(" :")
     return None
 
 
 def _raw_labeled_date(lines: list[str], labels: tuple[str, ...]) -> str | None:
-    label_pattern = "|".join(labels)
-    value = _value_after_label(lines, label_pattern)
+    value = _label_block_value(lines, labels) or _value_after_label(lines, "|".join(labels))
     if value:
-        match = re.search(
-            r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2}",
-            value,
-        )
-        return match.group(0) if match else value
+        return _first_date_text(value)
     return None
 
 
 def _raw_total_amount(lines: list[str]) -> float | str:
+    block_value = _label_block_value(
+        lines,
+        (
+            r"totaalbedrag",
+            r"totaal\s+incl\.?\s+btw",
+            r"invoice\s+total",
+            r"amount\s+due",
+            r"te\s+betalen",
+            r"totaal\s+te\s+betalen",
+        ),
+    )
+    if block_value and _amounts_in_text(block_value):
+        return _amounts_in_text(block_value)[-1]
+
     label_patterns = (
         r"invoice\s+total",
         r"amount\s+due",
@@ -408,54 +526,156 @@ def _raw_total_amount(lines: list[str]) -> float | str:
     for index, line in enumerate(lines):
         if not any(re.search(pattern, line, re.IGNORECASE) for pattern in label_patterns):
             continue
-        candidates = [line, *lines[index + 1 : index + 4]]
-        for candidate in candidates:
-            amounts = re.findall(r"\(?[-+]?\d{1,3}(?:[.,]\d{3})*[.,]\d{2}\)?", candidate)
+        window = " ".join([line, *lines[index + 1 : index + 8]])
+        amounts = _amounts_in_text(window)
+        if amounts:
+            return amounts[-1]
+
+    for index in range(len(lines) - 1, -1, -1):
+        line = lines[index]
+        if re.fullmatch(r"totaal|total", line, re.IGNORECASE):
+            amounts = _amounts_in_text(" ".join(lines[index + 1 : index + 4]))
             if amounts:
-                return _safe_float(amounts[-1])
+                return amounts[-1]
     return "NA"
 
 
 def _raw_total_tax(lines: list[str]) -> float | str:
+    block_value = _label_block_value(
+        lines,
+        (
+            r"btw-bedrag",
+            r"btw\s+bedrag",
+            r"totale\s+btw",
+            r"total\s+tax",
+            r"vat\s+amount",
+        ),
+    )
+    if block_value and _amounts_in_text(block_value):
+        return _amounts_in_text(block_value)[-1]
+
+    tax_amounts: list[float] = []
     for index, line in enumerate(lines):
-        if re.search(r"\b(?:total\s+)?(?:vat|btw)\b", line, re.IGNORECASE):
-            candidates = [line, *lines[index + 1 : index + 3]]
-            for candidate in candidates:
-                amounts = re.findall(r"\(?[-+]?\d{1,3}(?:[.,]\d{3})*[.,]\d{2}\)?", candidate)
-                if amounts:
-                    return _safe_float(amounts[-1])
+        if re.search(r"^\s*totaal\s+(?:btw|vat)\b", line, re.IGNORECASE):
+            continue
+        if re.search(r"\b(?:btw|vat)\s*(?:nr|id|no)|\bNL\d{3,}", line, re.IGNORECASE):
+            continue
+        if re.search(r"\b(?:btw|vat)\s*\d{1,2}(?:[,.]\d+)?\s*%", line, re.IGNORECASE):
+            window = " ".join(lines[index + 1 : index + 4])
+            amounts = _amounts_in_text(window)
+            if amounts:
+                tax_amounts.append(amounts[0])
+    if tax_amounts:
+        return round(sum(tax_amounts), 2)
+
     if any(re.search(r"\bzero\s+rated\b", line, re.IGNORECASE) for line in lines):
         return 0.0
     return "NA"
 
 
 def _raw_vendor_name(lines: list[str]) -> str | None:
-    for line in lines:
+    non_vendor_patterns = re.compile(
+        r"\bfactuur\s+voor\b|\bt\.?a\.?v\.?\b|\banna van buerenplein\b|"
+        r"\binvoice\s+(?:number|date)\b|\bdue\s+date\b|\bfactuur(?:nummer|datum)\b|"
+        r"\bvervaldatum\b|^GS Netherlands\b|^OCO\b|^Orange House\b|^Opdrachtgever\b",
+        re.IGNORECASE,
+    )
+    invoice_ref_pattern = re.compile(
+        r"^(?:[A-Z]{1,4}\s*INV[-\s]?\d+|\d{4}\s*/\s*\d+|V\d{6,})$",
+        re.IGNORECASE,
+    )
+    for line in lines[:100]:
+        if non_vendor_patterns.search(line):
+            continue
+        if invoice_ref_pattern.match(line.strip()):
+            continue
         match = re.search(r"\b[A-Z][A-Za-z0-9&.' -]+\s+(?:B\.?V\.?|Limited|Ltd\.?|Incasso B\.?V\.?)\b", line)
         if match and not re.search(r"\bGS Netherlands\b", match.group(0), re.IGNORECASE):
             return match.group(0).strip()
-    if "INVOICE" in [line.upper() for line in lines]:
-        invoice_index = [line.upper() for line in lines].index("INVOICE")
-        for line in lines[:invoice_index]:
-            if len(line) > 2 and not re.search(r"\bGLOBAL GROUP\b", line, re.IGNORECASE):
-                return line
+    for line in lines[:8]:
+        if non_vendor_patterns.search(line):
+            continue
+        cleaned = re.sub(r"\b(?:FACTUUR|INVOICE)\b", "", line, flags=re.IGNORECASE).strip(" -")
+        if len(cleaned) > 2 and not re.search(r"\bGLOBAL GROUP\b", cleaned, re.IGNORECASE):
+            return cleaned
     return None
 
 
 def _raw_property_name(lines: list[str]) -> str | None:
-    for line in lines:
-        match = re.search(r"\b(?:GS Netherlands|OCO|Orange House)[A-Za-z0-9 .'-]*(?:B\.?V\.?|C\.?V\.?)\b", line, re.IGNORECASE)
+    for line in lines[:40]:
+        match = re.search(
+            r"\b(?:GS Netherlands|OCO|Orange House)[A-Za-z0-9 .'-]*(?:B\.?V\.?|C\.?V\.?)\b",
+            line,
+            re.IGNORECASE,
+        )
         if match:
             return match.group(0).strip()
     return None
 
 
 def _is_money_line(line: str) -> bool:
-    return bool(re.fullmatch(r"\(?[-+]?\d{1,3}(?:[.,]\d{3})*[.,]\d{2}\)?", line.strip()))
+    return bool(_MONEY_PATTERN.fullmatch(str(line or "").strip()))
 
 
 def _is_quantity_line(line: str) -> bool:
-    return bool(re.fullmatch(r"\d+(?:[.,]\d+)?", line.strip()))
+    return bool(re.fullmatch(r"\d+(?:[.,]\d+)?(?:/[A-Za-z]+)?|[A-Za-z]+", line.strip()))
+
+
+def _is_item_number(line: str) -> bool:
+    return bool(re.fullmatch(r"\d{1,3}", line.strip()))
+
+
+def _looks_like_sku(line: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z0-9][A-Z0-9_-]{3,}", line.strip()))
+
+
+def _looks_like_rate(line: str) -> bool:
+    return bool(re.fullmatch(r"\d{1,2}(?:[,.]\d+)?\s*%|zero\s+rated", line.strip(), re.IGNORECASE))
+
+
+def _line_tax_from_amount(amount: float | str, vat_rate_text: str) -> float | str:
+    if amount == "NA":
+        return "NA"
+    if re.search(r"\bzero\s+rated\b|\b0\s*%", vat_rate_text or "", re.IGNORECASE):
+        return 0.0
+    match = re.search(r"(\d{1,2}(?:[,.]\d+)?)\s*%", vat_rate_text or "")
+    if match:
+        rate = float(match.group(1).replace(",", "."))
+        return round(float(amount) * rate / 100, 2)
+    return "NA"
+
+
+def _append_item(
+    rows: list[dict[str, Any]],
+    description_parts: list[str],
+    amount_text: str,
+    vat_rate_text: str = "",
+    tax_text: str = "",
+) -> None:
+    filtered_parts = [
+        part
+        for part in description_parts
+        if not (
+            len(description_parts) > 1
+            and re.search(r"\bGL\s*\d|^periode\b|^period\b", part, re.IGNORECASE)
+        )
+    ]
+    description = " ".join(part.strip() for part in filtered_parts if part.strip())
+    if not description:
+        return
+    amount = _safe_float(amount_text)
+    tax_amount = _safe_float(tax_text) if tax_text and _is_money_line(tax_text) else _line_tax_from_amount(amount, vat_rate_text)
+    if amount == 0.0 and (tax_amount == "NA" or _safe_float(tax_amount) == 0.0):
+        logging.info("Ignored zero-value OCR line item: %s", description)
+        return
+    rows.append(
+        {
+            "Description_Dutch": description,
+            "Amount": amount,
+            "Tax_Amount": tax_amount,
+            "VAT_Rate": "0%" if re.search(r"\bzero\s+rated\b", vat_rate_text, re.IGNORECASE) else vat_rate_text or None,
+        }
+    )
 
 
 def _raw_line_items(lines: list[str]) -> list[dict[str, Any]]:
@@ -467,10 +687,8 @@ def _raw_line_items(lines: list[str]) -> list[dict[str, Any]]:
     if start is None:
         return []
 
-    for index in range(start, min(start + 8, len(lines))):
-        if re.search(r"\bamount\b|\bbedrag\b|\btotaal\b", lines[index], re.IGNORECASE):
-            start = index + 1
-            break
+    while start < len(lines) and _is_known_label(lines[start]):
+        start += 1
 
     stop_words = re.compile(r"^(subtotal|totaal|invoice total|amount due|vat rates|btw|for payment)\b", re.IGNORECASE)
     rows: list[dict[str, Any]] = []
@@ -480,22 +698,64 @@ def _raw_line_items(lines: list[str]) -> list[dict[str, Any]]:
         line = lines[index]
         if stop_words.search(line):
             break
+
+        if _is_item_number(line) and index + 7 < len(lines) and _looks_like_sku(lines[index + 1]):
+            desc = [lines[index + 2]]
+            cursor = index + 3
+            while cursor < len(lines) and not re.search(r"\d+(?:[.,]\d+)?/[A-Za-z]+", lines[cursor]):
+                if not _is_money_line(lines[cursor]) and not _looks_like_rate(lines[cursor]):
+                    desc.append(lines[cursor])
+                cursor += 1
+            if cursor + 4 < len(lines):
+                net_total = lines[cursor + 3]
+                vat_rate = lines[cursor + 4]
+                if _is_money_line(net_total) and _looks_like_rate(vat_rate):
+                    _append_item(rows, desc, net_total, vat_rate)
+                    description_parts = []
+                    index = cursor + 5
+                    continue
+
         if _is_quantity_line(line) and description_parts:
-            rate = lines[index + 1] if index + 1 < len(lines) else ""
-            vat_text = lines[index + 2] if index + 2 < len(lines) else ""
-            amount_text = lines[index + 3] if index + 3 < len(lines) else ""
-            if _is_money_line(rate) and amount_text and _is_money_line(amount_text):
-                rows.append(
-                    {
-                        "Description_Dutch": " ".join(description_parts),
-                        "Amount": _safe_float(amount_text),
-                        "Tax_Amount": 0.0 if re.search(r"\bzero\s+rated\b|\b0\s*%", vat_text, re.IGNORECASE) else "NA",
-                        "VAT_Rate": "0%" if re.search(r"\bzero\s+rated\b|\b0\s*%", vat_text, re.IGNORECASE) else vat_text or None,
-                    }
-                )
+            lookahead = lines[index + 1 : index + 6]
+            if (
+                len(lookahead) >= 4
+                and _is_money_line(lookahead[0])
+                and _looks_like_rate(lookahead[1])
+                and _is_money_line(lookahead[2])
+                and _is_money_line(lookahead[3])
+            ):
+                _append_item(rows, description_parts, lookahead[3], lookahead[1], lookahead[2])
+                description_parts = []
+                index += 5
+                continue
+            if (
+                len(lookahead) >= 3
+                and _is_money_line(lookahead[0])
+                and _looks_like_rate(lookahead[1])
+                and _is_money_line(lookahead[2])
+            ):
+                _append_item(rows, description_parts, lookahead[2], lookahead[1])
                 description_parts = []
                 index += 4
                 continue
+            if (
+                len(lookahead) >= 4
+                and not _is_money_line(lookahead[0])
+                and _looks_like_rate(lookahead[1])
+                and _is_money_line(lookahead[2])
+            ):
+                _append_item(rows, description_parts, lookahead[2], lookahead[1])
+                description_parts = []
+                index += 4
+                continue
+
+        if re.match(r"^\d+\s+\D", line) and index + 3 < len(lines):
+            desc = [re.sub(r"^\d+\s+", "", line)]
+            if _is_money_line(lines[index + 1]) and _is_money_line(lines[index + 2]) and _looks_like_rate(lines[index + 3]):
+                _append_item(rows, desc, lines[index + 2], lines[index + 3])
+                index += 4
+                continue
+
         if not _is_money_line(line):
             description_parts.append(line)
         index += 1
@@ -519,6 +779,7 @@ def _apply_raw_text_fallbacks(parsed: dict[str, Any], raw_text: str) -> dict[str
     for key, value in fallbacks.items():
         if not _has_value(parsed.get(key)) and _has_value(value):
             parsed[key] = value
+            logging.info("Applied raw OCR fallback for %s.", key)
 
     if not _has_value(parsed.get("Description_Dutch")):
         notes = _value_after_label(lines, r"\bnotes?\b")
@@ -526,6 +787,8 @@ def _apply_raw_text_fallbacks(parsed: dict[str, Any], raw_text: str) -> dict[str
 
     if not parsed.get("InvoiceItems"):
         parsed["InvoiceItems"] = _raw_line_items(lines)
+        if parsed["InvoiceItems"]:
+            logging.info("Parsed %s line item(s) from raw OCR text.", len(parsed["InvoiceItems"]))
         if not parsed["InvoiceItems"] and _has_value(parsed.get("Amount")):
             parsed["InvoiceItems"] = [
                 {
@@ -535,6 +798,16 @@ def _apply_raw_text_fallbacks(parsed: dict[str, Any], raw_text: str) -> dict[str
                     "VAT_Rate": parsed.get("VAT_Rate"),
                 }
             ]
+
+    line_tax_sum = sum(
+        _safe_float(item.get("Tax_Amount"))
+        for item in parsed.get("InvoiceItems", []) or []
+        if isinstance(item, dict) and _has_value(item.get("Tax_Amount"))
+    )
+    if line_tax_sum > 0:
+        header_tax = parsed.get("Tax_Amount")
+        if not _has_value(header_tax) or abs(_safe_float(header_tax) - line_tax_sum) > 0.01:
+            parsed["Tax_Amount"] = round(line_tax_sum, 2)
 
     if parsed.get("IBAN") == "NA":
         parsed["IBAN"] = _iban_from_text(raw_text)

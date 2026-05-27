@@ -528,21 +528,37 @@ def generate_yardi_payload(ocr_data: dict, original_filename: str) -> dict:
         vendor_code=person_code,
         vendor_name=matched_vendor,
     )
+    previous_posting_match: dict[str, Any] | None = None
     for item in invoice_items:
-        item_match = get_expense_account_match(
-            " ".join(
-                part
-                for part in (item.get("NOTES", ""), english_desc, dutch_desc)
-                if part and part != "NA"
-            ),
-            property_code=yardi_property_code,
-            vendor_code=person_code,
-            vendor_name=matched_vendor,
+        item_notes = str(item.get("NOTES", ""))
+        is_discount_line = (
+            safe_float(item.get("AMOUNT")) < 0
+            and re.search(r"\b(?:discount|korting|rebate)\b", item_notes, re.IGNORECASE)
         )
-        selected_match = item_match if item_match.get("account") != "NA" else header_match
+        if is_discount_line and previous_posting_match is not None:
+            selected_match = previous_posting_match
+            logging.info(
+                "Discount line inherited account=%s notes=%r",
+                selected_match.get("account"),
+                selected_match.get("notes"),
+            )
+        else:
+            item_match = get_expense_account_match(
+                " ".join(
+                    part
+                    for part in (item_notes, english_desc, dutch_desc)
+                    if part and part != "NA"
+                ),
+                property_code=yardi_property_code,
+                vendor_code=person_code,
+                vendor_name=matched_vendor,
+            )
+            selected_match = item_match if item_match.get("account") != "NA" else header_match
         item["ACCOUNT"] = str(selected_match.get("account", "NA"))
         if selected_match.get("notes") not in (None, "", "NA"):
             item["NOTES"] = str(selected_match["notes"])
+        if not is_discount_line and item["ACCOUNT"] != "NA":
+            previous_posting_match = selected_match
 
     from_date, to_date = extract_dates_from_text(english_desc, date_formatted)
 
