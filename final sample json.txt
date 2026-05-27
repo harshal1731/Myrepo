@@ -1,0 +1,54 @@
+{
+  "vendor_file_name": "Invoice_12345.pdf",
+  "status": "Ready to Post",
+  "etl_data": {
+    "PROPERTY": "nlcdresi",
+    "PERSON": "nlteccoe",
+    "OFFSET": "11020000",
+    "DUEDATE": "19/06/2026",
+    "DATE": "20/05/2026",
+    "POSTMONTH": "05/2026",
+    "ACCOUNT": "52190000",
+    "ACCRUAL": "21010000",
+    "REF": "INV-12345",
+    "SEGMENT1": "NA",
+    "SEGMENT2": "NA",
+    "SEGMENT3": "NA",
+    "SEGMENT4": "NA",
+    "SEGMENT5": "NA",
+    "SEGMENT6": "NA",
+    "SEGMENT7": "NA",
+    "SEGMENT8": "NA",
+    "SEGMENT9": "NA",
+    "SEGMENT10": "NA",
+    "SEGMENT11": "NA",
+    "SEGMENT12": "NA",
+    "EXCHANGERATE": "NA",
+    "EXCHANGERATEDATE": "NA",
+    "TAXAMOUNT1": "NA",
+    "TAXAMOUNT2": "NA",
+    "FROMDATE": "20/05/2026",
+    "TODATE": "20/05/2026",
+    "EXPENSETYPE": "Expense (Opex)",
+    "DETAILNOTES": "Monthly cleaning fees translated to English",
+    "DISPLAYTYPE": "NLVatApplicablePayable",
+    "ISCONSOLIDATECHECKS": -1,
+    "DETAILVATTRANTYPEID": "apresex",
+    "DETAILVATRATEID": "Uksr",
+    "INTERNATIONALPAYMENTTYPE": "EFT",
+    "InvoiceItems": [
+      {
+        "TRANNUM": 1,
+        "NOTES": "Monthly cleaning fees",
+        "AMOUNT": 250.50,
+        "DETAILTAXAMOUNT1": 43.47
+      },
+      {
+        "TRANNUM": 2,
+        "NOTES": "Monthly cleaning fees",
+        "AMOUNT": 266.50,
+        "DETAILTAXAMOUNT1": 43.47
+      }
+    ]
+  }
+}

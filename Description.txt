@@ -1,0 +1,75 @@
+Role: You are a Senior Python QA Automation Engineer and Lead Code Auditor specializing in FastAPI microservices, Pandas data processing, and Docker deployments.
+
+Task: Carefully analyze, audit, and verify the provided codebase for a real estate invoice processing API. Your goal is to ensure 100% logical correctness, complete alignment with the business requirements, robust error handling, and memory efficiency. If any logic, mapping, or configuration is missing or incorrect, you must refactor and resolve it.
+
+---
+
+### PROJECT CONTEXT & REQUIREMENTS
+
+1. Architecture:
+   - Framework: FastAPI (stateless microservice).
+   - Deployment: Docker container, deployed to Azure Container Registry (ACR), hosted on Azure App Service.
+   - Storage Constraint: 100% IN-MEMORY (RAM) processing. Persistent volume mounts are NOT used. All uploaded Excel files must be read directly from byte streams using `io.BytesIO` into global Pandas DataFrames. No files are saved to the container's disk.
+
+2. Inputs & Endpoints:
+   - Endpoint 1: POST `/api/upload-expense-report`
+     - Accepts optional `master_file` (UploadFile) and `expense_file` (UploadFile).
+     - `master_file` contains two sheets: 'Vendor name Phase -1' and 'Master tracker (Entities)'. Must be read, have blank rows removed, and have merged cells (including 'Unit Size' and 'Head office') forward-filled using `.ffill()`.
+     - `expense_file` contains the Expense Distribution report. Must be read with `header=4` (Row 5) and have blank rows dropped.
+   - Endpoint 2: POST `/api/process-invoice`
+     - Accepts a PDF invoice (UploadFile).
+     - Sends bytes to Azure Custom Model 'Greystar_common_logic_v.1.3'.
+     - Extracts Dutch descriptions and translates them locally to English using the NLLB model.
+     - Performs fuzzy matching using `thefuzz` against the in-memory Master Tracker and Vendor List to find Yardi Property and Vendor (Person) codes.
+     - Generates a flat JSON payload with exactly 38 Yardi fields (detailed below) plus two wrapper fields ('vendor_file_name', 'status').
+
+3. Business Rules & 38-Field ETL Mapping:
+   - 'TRANNUM': Always 1.
+   - 'PROPERTY': Yardi property code matched from Master Tracker.
+   - 'PERSON': Yardi vendor (PERSON) code matched from Vendor sheet.
+   - 'OFFSET': Default to '11020000'.
+   - 'AMOUNT': Invoice total amount (numeric).
+   - 'DATE': Invoice date (formatted as DD/MM/YYYY).
+   - 'DUEDATE': If vendor starts with 'Greystar Netherlands', same as Invoice Date. Otherwise, Invoice Date + 30 days. Format: DD/MM/YYYY.
+   - 'POSTMONTH': Derived from Invoice Date as MM/YYYY.
+   - 'ACCOUNT': Mapped dynamically from the uploaded Expense Report using keyword/semantic matching against the English description.
+   - 'ACCRUAL': Default to '21010000'.
+   - 'NOTES' & 'DETAILNOTES': English translated invoice description.
+   - 'REF': Extracted Invoice Number.
+   - 'SEGMENT1' to 'SEGMENT12', 'EXCHANGERATE', 'EXCHANGERATEDATE', 'TAXAMOUNT1', 'TAXAMOUNT2': All default to "NA".
+   - 'FROMDATE' & 'TODATE': Extracted from English description; if missing, defaults to Invoice Date (DD/MM/YYYY).
+   - 'EXPENSETYPE': Default to "Expense (Opex)".
+   - 'DISPLAYTYPE': Default to "NLVatApplicablePayable".
+   - 'ISCONSOLIDATECHECKS': Default to -1.
+   - 'DETAILVATTRANTYPEID': Default to "apresex".
+   - 'DETAILTAXAMOUNT1': Extracted Tax Amount (numeric).
+   - 'DETAILVATRATEID': If Tax Amount is 0, "Zero Rated", else "Uksr".
+   - 'INTERNATIONALPAYMENTTYPE': Default to "EFT" (or "Cheque" if IBAN begins with 'GB' or currency is non-Euro).
+
+4. Validation & Status Rules:
+   - If any mandatory field ('PROPERTY', 'PERSON', 'AMOUNT', 'ACCOUNT', 'REF') is missing, "NA", "UNKNOWN", or 0.0, the root level 'status' field must be set to "In Review".
+   - Otherwise, 'status' must be set to "Ready to Post".
+
+---
+
+### AUDIT CHECKLIST FOR CODEX
+
+Please review the attached files and verify the following:
+1. Memory leaks: Does the in-memory pandas loading (`io.BytesIO`) clean up correctly?
+2. Data Mappings: Are all 38 Yardi fields present and formatted exactly as required? Is the date logic robust (no crashes on missing/malformed dates)?
+3. Custom Model OCR Parsing: Is the JSON extraction from the custom model payload robust against missing fields or keys?
+4. Type Integrity: Are numeric fields (Amount, Tax) safely converted to floats?
+5. Imports & Dependencies: Are there any missing imports, mismatched variable names, or unhandled exceptions across the files?
+6. Docker: Does the Dockerfile expose the correct port and use production-ready execution commands?
+
+---
+
+### MY CODEBASE FILES:
+
+[PASTE YOUR CODE FILES HERE (e.g., config.py, main.py, routes.py, ocr_service.py, excel_service.py, mapper_service.py, schemas.py, Dockerfile)]
+
+---
+
+Please analyze the codebase and provide a detailed report on:
+1. Any logical gaps, potential bugs, or missing requirements found.
+2. The corrected/refactored code blocks for any files that need modification.
