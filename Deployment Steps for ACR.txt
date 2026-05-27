@@ -1,0 +1,39 @@
+[3] DEPLOYMENT STEPS (Azure ACR) - Greystar
+
+
+1. Show ACR Credentials:
+az acr credential show --name faprojectcontainer
+
+2. Login to ACR:
+az acr login --name faprojectcontainer
+
+3. Build Local Docker Image:
+docker build -t greystar-invoice-api:v2 .
+
+4. Local Debugging 
+docker run -d -p 8000:8000 greystar-invoice-api:v2
+
+5. Tag Local Image for Azure:
+docker tag greystar-invoice-api:v2 faprojectcontainer.azurecr.io/greystar-invoice-api:v2
+
+6. Push Image to ACR:
+docker push faprojectcontainer.azurecr.io/greystar-invoice-api:v2
+
+7. Verify Image in Registry:
+az acr repository list --name faprojectcontainer --output table
+
+8. Update Container App to Deploy:
+az containerapp update --name acacium-self-bill --resource-group QX-SOFT-UK --image faprojectcontainer.azurecr.io/bill-processor:v18
+
+az containerapp update --name acacium-self-bill --resource-group QX-SOFT-UK --image faprojectcontainer.azurecr.io/bill-processor:v18 --set-env-vars APP1_API_KEY="f87e0b7829c386218e4763642a74790c608424ad63ebe7fb9e57bc6a98e02e5a"
+
+PROJECT: Bill Extraction API (LayoutLMv3 + FastAPI)
+RESOURCE GROUP: QX-SOFT-UK
+CONTAINER APP: acacium-self-bill
+ACR NAME: faprojectcontainer
+
+az container create --resource-group QX-SOFT-UK --name acacium-self-bill --image faprojectcontainer.azurecr.io/bill-processor --ports 80
+
+
+Check deployments error or python error
+az containerapp logs show --name acacium-self-bill --resource-group QX-SOFT-UK --type console

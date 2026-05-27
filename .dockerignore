@@ -1,0 +1,19 @@
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environments
+env/
+venv/
+.venv/
+
+# Do not copy local uploaded files or logs into the fresh cloud container
+data/uploads/*
+data/dynamic/*
+logs/*
+
+# IDEs
+.vscode/
+.idea/

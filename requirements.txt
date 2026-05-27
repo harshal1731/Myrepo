@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+python-multipart
+requests
+pandas
+openpyxl
+thefuzz
+transformers
+torch
+pydantic
