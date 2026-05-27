@@ -43,9 +43,9 @@ for folder in [UPLOAD_DIR, LOGS_DIR]:
 MASTER_COMBINED_PATH = os.path.join(UPLOAD_DIR, "Uploaded_Master_Combined.xlsx") 
 EXPENSE_REPORT_PATH = os.path.join(UPLOAD_DIR, "Uploaded_Expense_Report.xlsx")
 
-AZURE_ENDPOINT = ""
-AZURE_KEY = ""
-AZURE_MODEL_NAME = ""
+AZURE_ENDPOINT = "https://qxssinvoiceocrfree.cognitiveservices.azure.com/"
+AZURE_KEY = "71b9x2mnZMgIR7SjJnAtaf4wlR6VD5HiBvj3i8QD9zRnwoKJVaIMJQQJ99BEACYeBjFXJ3w3AAALACOG3iIu"
+AZURE_MODEL_NAME = "Greystar_common_logic_v.1.3"
 """,
 
     "app/main.py": """import logging
