@@ -33,6 +33,14 @@ def extract_invoice_data_from_memory(pdf_bytes: bytes) -> dict:
         try:
             result = _analyze_with_model(pdf_bytes, model_name)
             parsed = parse_azure_response(result)
+            if (
+                model_name != config.AZURE_FALLBACK_MODEL_NAME
+                and not _has_minimum_invoice_fields(parsed)
+            ):
+                raise AzureOcrError(
+                    "Azure custom model result is missing critical invoice fields.",
+                    retryable=True,
+                )
             parsed["Azure_Model"] = model_name
             return parsed
         except AzureOcrError as exc:
@@ -43,6 +51,26 @@ def extract_invoice_data_from_memory(pdf_bytes: bytes) -> dict:
             logging.warning("Azure model %s failed; falling back. Error: %s", model_name, exc)
 
     raise AzureOcrError("Azure OCR did not run.")
+
+
+def _has_minimum_invoice_fields(parsed: dict) -> bool:
+    critical_values = [
+        parsed.get("Invoice_Number"),
+        parsed.get("Vendor_Name"),
+        parsed.get("Invoice_Date"),
+        parsed.get("Amount"),
+    ]
+    populated = sum(
+        1
+        for value in critical_values
+        if value not in (None, "", "NA", 0, 0.0)
+    )
+    has_line_amount = any(
+        item.get("Amount") not in (None, "", "NA", 0, 0.0)
+        for item in parsed.get("InvoiceItems", []) or []
+        if isinstance(item, dict)
+    )
+    return populated >= 3 and has_line_amount
 
 
 def _analyze_with_model(pdf_bytes: bytes, model_name: str) -> dict:
@@ -167,6 +195,12 @@ def _field_value(field: Any) -> Any:
     return None
 
 
+def _field_content(field: Any) -> str:
+    if not isinstance(field, dict):
+        return "" if field is None else str(field)
+    return str(field.get("content") or field.get("valueString") or "").strip()
+
+
 def _lookup_field(fields: dict[str, Any], aliases: list[str]) -> Any:
     lookup = {_normalise_key(key): value for key, value in fields.items()}
     for alias in aliases:
@@ -213,6 +247,95 @@ def _safe_float(value: Any) -> float:
         return 0.0
 
 
+def _numeric_or_na(value: Any) -> float | str:
+    return "NA" if value in (None, "") else _safe_float(value)
+
+
+def _currency_numeric_or_na(field: Any) -> float | str:
+    if field in (None, ""):
+        return "NA"
+    if not isinstance(field, dict):
+        return _numeric_or_na(field)
+
+    content = _field_content(field)
+    if content and ("(" in content or "-" in content):
+        return _numeric_or_na(content)
+
+    currency = field.get("valueCurrency")
+    if isinstance(currency, dict) and currency.get("amount") is not None:
+        return float(currency["amount"])
+
+    return _numeric_or_na(_field_value(field))
+
+
+def _tax_numeric_or_na(field: Any) -> float | str:
+    if field in (None, ""):
+        return "NA"
+    if not isinstance(field, dict):
+        return _numeric_or_na(field)
+
+    content = _field_content(field)
+    if re.search(r"\bzero\s+rated\b", content, re.IGNORECASE) or re.search(r"\b0\s*%", content):
+        return 0.0
+    if content and not re.search(r"\d", content):
+        return "NA"
+
+    return _currency_numeric_or_na(field)
+
+
+def _field_pages(field: Any) -> set[int]:
+    if not isinstance(field, dict):
+        return set()
+    pages = {
+        int(region["pageNumber"])
+        for region in field.get("boundingRegions", []) or []
+        if isinstance(region, dict) and region.get("pageNumber") is not None
+    }
+    if pages:
+        return pages
+    if isinstance(field.get("valueObject"), dict):
+        for child in field["valueObject"].values():
+            pages.update(_field_pages(child))
+    return pages
+
+
+def _invoice_header_pages(fields: dict[str, Any]) -> set[int]:
+    pages: set[int] = set()
+    for alias in (
+        "InvoiceId",
+        "InvoiceNumber",
+        "InvoiceDate",
+        "DueDate",
+        "InvoiceTotal",
+        "AmountDue",
+        "TotalTax",
+    ):
+        pages.update(_field_pages(_lookup_raw_field(fields, [alias])))
+    return pages
+
+
+def _invoice_identity_pages(fields: dict[str, Any]) -> set[int]:
+    pages: set[int] = set()
+    for alias in ("InvoiceId", "InvoiceNumber", "InvoiceDate", "DueDate"):
+        pages.update(_field_pages(_lookup_raw_field(fields, [alias])))
+    return pages
+
+
+def _iban_from_text(text: str) -> str:
+    labelled = re.search(r"\bIBAN\b\s*:?\s*([^\r\n]+)", text or "", re.IGNORECASE)
+    if labelled:
+        candidate = re.sub(r"[^A-Z0-9]", "", labelled.group(1).upper())
+        if len(candidate) >= 15 and re.match(r"^[A-Z]{2}\d{2}", candidate):
+            return candidate
+
+    match = re.search(
+        r"\b(?:NL|GB|DE|FR|BE|ES|IT|IE|LU)\d{2}(?:\s?[A-Z0-9]){11,30}\b",
+        text or "",
+        re.IGNORECASE,
+    )
+    return re.sub(r"\s+", "", match.group(0)).upper() if match else "NA"
+
+
 def _currency_code(fields: dict[str, Any]) -> str:
     for alias in ("InvoiceTotal", "TotalAmount", "Amount", "Invoice Total"):
         raw = _lookup_raw_field(fields, [alias])
@@ -230,7 +353,22 @@ def _extract_invoice_items(fields: dict[str, Any]) -> list[dict[str, Any]]:
         return []
 
     invoice_items: list[dict[str, Any]] = []
-    for item in items_field.get("valueArray", []) or []:
+    raw_items = items_field.get("valueArray", []) or []
+    identity_pages = _invoice_identity_pages(fields)
+    header_pages = identity_pages or _invoice_header_pages(fields)
+    item_pages = [_field_pages(item) for item in raw_items]
+    if header_pages and any(pages & header_pages for pages in item_pages):
+        filtered_items = [
+            item for item, pages in zip(raw_items, item_pages) if pages & header_pages
+        ]
+        if len(filtered_items) != len(raw_items):
+            logging.info(
+                "Ignored %s OCR item(s) from attachment/non-header pages.",
+                len(raw_items) - len(filtered_items),
+            )
+        raw_items = filtered_items
+
+    for item in raw_items:
         item_obj = item.get("valueObject", {}) if isinstance(item, dict) else {}
         if not isinstance(item_obj, dict):
             continue
@@ -239,11 +377,11 @@ def _extract_invoice_items(fields: dict[str, Any]) -> list[dict[str, Any]]:
             item_obj,
             ["Description", "description", "Omschrijving", "ItemDescription"],
         )
-        amount = _lookup_field(
+        amount_field = _lookup_raw_field(
             item_obj,
             ["Amount", "LineAmount", "TotalPrice", "NetAmount", "ItemTotal"],
         )
-        tax_amount = _lookup_field(
+        tax_field = _lookup_raw_field(
             item_obj,
             ["Tax", "TaxAmount", "VAT", "VATAmount", "TotalTax", "btw"],
         )
@@ -254,8 +392,8 @@ def _extract_invoice_items(fields: dict[str, Any]) -> list[dict[str, Any]]:
         invoice_items.append(
             {
                 "Description_Dutch": str(description).replace("\n", " ") if description else "",
-                "Amount": _safe_float(amount),
-                "Tax_Amount": _safe_float(tax_amount),
+                "Amount": _currency_numeric_or_na(amount_field),
+                "Tax_Amount": _tax_numeric_or_na(tax_field),
                 "VAT_Rate": vat_rate,
             }
         )
@@ -265,6 +403,7 @@ def _extract_invoice_items(fields: dict[str, Any]) -> list[dict[str, Any]]:
 
 def parse_azure_response(result: dict) -> dict:
     docs = result.get("analyzeResult", {}).get("documents", [])
+    raw_text = result.get("analyzeResult", {}).get("content", "") or ""
     if not docs:
         logging.warning("Azure returned no document records.")
         return {
@@ -272,13 +411,15 @@ def parse_azure_response(result: dict) -> dict:
             "Vendor_Name": "NA",
             "Property_Name": "NA",
             "Invoice_Date": None,
-            "Amount": 0.0,
-            "Tax_Amount": 0.0,
+            "Due_Date": None,
+            "Amount": "NA",
+            "Tax_Amount": "NA",
             "VAT_Rate": None,
             "Description_Dutch": "",
             "IBAN": "NA",
             "Currency": "EUR",
             "InvoiceItems": [],
+            "Raw_Text": raw_text,
         }
 
     fields = docs[0].get("fields", {}) or {}
@@ -332,15 +473,16 @@ def parse_azure_response(result: dict) -> dict:
             fields,
             ["DueDate", "Due Date", "PaymentDueDate", "Payment Due Date", "InvoiceDueDate"],
         ),
-        "Amount": _safe_float(
+        "Amount": _numeric_or_na(
             _lookup_field(fields, ["InvoiceTotal", "Invoice Total", "TotalAmount", "amount", "Amount"])
         ),
-        "Tax_Amount": _safe_float(
+        "Tax_Amount": _numeric_or_na(
             _lookup_field(fields, ["TotalTax", "VAT", "VATAmount", "Tax", "btw", "vat"])
         ),
         "VAT_Rate": _lookup_field(fields, ["VATRate", "VatRate", "TaxRate", "Tax Rate", "btw percentage"]),
         "Description_Dutch": " | ".join(descriptions),
-        "IBAN": _lookup_field(fields, ["IBAN", "BankAccount", "Bank Account"]) or "NA",
+        "IBAN": _lookup_field(fields, ["IBAN", "BankAccount", "Bank Account"]) or _iban_from_text(raw_text),
         "Currency": _currency_code(fields),
         "InvoiceItems": invoice_items,
+        "Raw_Text": raw_text,
     }

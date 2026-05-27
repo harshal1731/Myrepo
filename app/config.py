@@ -21,8 +21,8 @@ AZURE_ENDPOINT = os.getenv(
     "https://greystarinvociedataextractionuk.cognitiveservices.azure.com/",
 ).rstrip("/") + "/"
 AZURE_KEY = os.getenv("AZURE_KEY", "")
-AZURE_MODEL_NAME = os.getenv("AZURE_MODEL_NAME", "Greystar_common_logic_v.1.3")
-AZURE_FALLBACK_MODEL_NAME = os.getenv("AZURE_FALLBACK_MODEL_NAME", "prebuilt-invoice")
+AZURE_MODEL_NAME = os.getenv("AZURE_MODEL_NAME", "Greystar_common_logic_UK_v.1.3")
+AZURE_FALLBACK_MODEL_NAME = os.getenv("AZURE_FALLBACK_MODEL_NAME", "").strip()
 AZURE_API_VERSION = os.getenv("AZURE_API_VERSION", "2024-11-30")
 AZURE_POLL_INTERVAL_SECONDS = float(os.getenv("AZURE_POLL_INTERVAL_SECONDS", "2"))
 AZURE_POLL_TIMEOUT_SECONDS = int(os.getenv("AZURE_POLL_TIMEOUT_SECONDS", "120"))

@@ -123,6 +123,28 @@ def _normalise_name(value: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value or "").strip().lower())
 
 
+def _word_tokens(value: Any) -> set[str]:
+    stop_words = {
+        "bv",
+        "b",
+        "v",
+        "cv",
+        "c",
+        "gp",
+        "opco",
+        "propco",
+        "the",
+        "and",
+        "netherlands",
+        "nederland",
+    }
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", str(value or "").lower())
+        if len(token) > 1 and token not in stop_words
+    }
+
+
 def _has_value(series: pd.Series) -> pd.Series:
     return series.notna() & series.astype(str).str.strip().ne("")
 
@@ -279,6 +301,10 @@ def _clean_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value).strip())
 
 
+def _is_missing_text(value: Any) -> bool:
+    return _clean_text(value).upper() in {"", "NA", "N/A", "NONE", "NULL", "UNKNOWN", "NAN"}
+
+
 def _normalise_account_code(value: Any) -> str:
     if value is None or pd.isna(value):
         return "NA"
@@ -313,7 +339,7 @@ def get_vendor_person_code(raw_vendor_name: str) -> tuple[str, str]:
         vendor_df = df_vendor
 
     raw_vendor_name = _clean_text(raw_vendor_name)
-    if vendor_df.empty or not raw_vendor_name:
+    if vendor_df.empty or _is_missing_text(raw_vendor_name):
         return "NA", raw_vendor_name or "NA"
 
     choices: list[tuple[str, int]] = []
@@ -338,12 +364,59 @@ def get_vendor_person_code(raw_vendor_name: str) -> tuple[str, str]:
     return person or "NA", best_text
 
 
+def get_vendor_person_code_from_text(raw_text: str) -> tuple[str, str]:
+    with _DATA_LOCK:
+        vendor_df = df_vendor
+
+    cleaned_text = _clean_text(raw_text)
+    if vendor_df.empty or _is_missing_text(cleaned_text):
+        return "NA", "NA"
+
+    normalised_text = _normalise_name(cleaned_text)
+    matches: list[tuple[int, int, str, str]] = []
+    for row_index, row in vendor_df.iterrows():
+        for column in ("Vendor name", "PayeeName"):
+            if column not in vendor_df.columns:
+                continue
+            vendor_name = _clean_text(row.get(column))
+            normalised_vendor = _normalise_name(vendor_name)
+            if len(normalised_vendor) >= 4 and normalised_vendor in normalised_text:
+                matches.append((len(normalised_vendor), row_index, vendor_name, column))
+
+    if not matches:
+        return "NA", "NA"
+
+    _, row_index, vendor_name, column = max(matches, key=lambda item: item[0])
+    row = vendor_df.loc[row_index]
+    person = _clean_text(row.get("PERSON"))
+    logging.info(
+        "Vendor text fallback matched vendor=%r column=%s person=%s",
+        vendor_name,
+        column,
+        person or "NA",
+    )
+    return person or "NA", vendor_name or "NA"
+
+
 def get_property_yardi_code(
     raw_property_name: str,
     *,
     unit_number: str = "",
     vendor_name: str = "",
 ) -> str:
+    return get_property_match_details(
+        raw_property_name,
+        unit_number=unit_number,
+        vendor_name=vendor_name,
+    ).get("yardi_code", "NA")
+
+
+def get_property_match_details(
+    raw_property_name: str,
+    *,
+    unit_number: str = "",
+    vendor_name: str = "",
+) -> dict[str, str | int]:
     with _DATA_LOCK:
         master_df = df_master
 
@@ -351,7 +424,7 @@ def get_property_yardi_code(
     unit_number = _clean_text(unit_number)
     vendor_name = _clean_text(vendor_name)
     if master_df.empty:
-        return "NA"
+        return {"yardi_code": "NA", "score": 0}
 
     if (
         vendor_name.lower().startswith("eteck incasso b.v")
@@ -363,11 +436,11 @@ def get_property_yardi_code(
             == unit_number.lower()
         ]
         if not unit_rows.empty:
-            yardi_code = _clean_text(unit_rows.iloc[0].get("Yardi code"))
-            return yardi_code or "NA"
+            row = unit_rows.iloc[0]
+            return _property_details_from_row(row, score=100)
 
-    if not raw_property_name:
-        return "NA"
+    if _is_missing_text(raw_property_name):
+        return {"yardi_code": "NA", "score": 0}
 
     match_columns = [
         "Property name",
@@ -381,6 +454,10 @@ def get_property_yardi_code(
         "Abbreviation",
         "Yardi code",
     ]
+
+    exact_match = _exact_property_match(master_df, raw_property_name, match_columns)
+    if exact_match is not None:
+        return exact_match
 
     choices: list[tuple[str, int]] = []
     for row_index, row in master_df.iterrows():
@@ -397,10 +474,81 @@ def get_property_yardi_code(
     )
     logging.info("Property match query=%r best=%r score=%s", raw_property_name, best_text, score)
     if row_index is None:
-        return "NA"
+        return {"yardi_code": "NA", "matched_text": best_text, "score": score}
 
-    yardi_code = _clean_text(master_df.loc[row_index].get("Yardi code"))
-    return yardi_code or "NA"
+    return _property_details_from_row(master_df.loc[row_index], score=score, matched_text=best_text)
+
+
+def _exact_property_match(
+    master_df: pd.DataFrame,
+    raw_property_name: str,
+    match_columns: list[str],
+) -> dict[str, str | int] | None:
+    query_norm = _normalise_name(raw_property_name)
+    query_tokens = _word_tokens(raw_property_name)
+    matches: list[tuple[int, int, int, str]] = []
+    priority_by_column = {
+        "Abbreviation": 0,
+        "Yardi code": 1,
+        "Property name": 2,
+        "PropertyName1": 2,
+        "PropertyName2": 2,
+        "SiteName": 3,
+        "BrandName": 3,
+        "ProjectName": 3,
+        "Site address": 4,
+        "SiteAddress": 4,
+    }
+
+    for row_index, row in master_df.iterrows():
+        for column in match_columns:
+            if column not in master_df.columns:
+                continue
+            text = _clean_text(row.get(column))
+            text_norm = _normalise_name(text)
+            if len(text_norm) < 3:
+                continue
+
+            priority = priority_by_column.get(column, 5)
+            if text_norm in query_norm:
+                matches.append((priority, -len(text_norm), row_index, text))
+                continue
+
+            text_tokens = _word_tokens(text)
+            if text_tokens and text_tokens.issubset(query_tokens):
+                matches.append((priority, -sum(len(token) for token in text_tokens), row_index, text))
+
+    if not matches:
+        return None
+
+    priority, _, row_index, matched_text = min(matches)
+    logging.info(
+        "Property exact match query=%r best=%r priority=%s",
+        raw_property_name,
+        matched_text,
+        priority,
+    )
+    return _property_details_from_row(
+        master_df.loc[row_index],
+        score=100,
+        matched_text=matched_text,
+    )
+
+
+def _property_details_from_row(
+    row: pd.Series,
+    *,
+    score: int,
+    matched_text: str = "",
+) -> dict[str, str | int]:
+    return {
+        "yardi_code": _clean_text(row.get("Yardi code")) or "NA",
+        "property_name": _clean_text(row.get("Property name")) or "NA",
+        "site_name": _clean_text(row.get("SiteName")) or "NA",
+        "site_address": _clean_text(row.get("Site address") or row.get("SiteAddress")) or "NA",
+        "matched_text": matched_text or _clean_text(row.get("Property name")) or "NA",
+        "score": score,
+    }
 
 
 def get_expense_account_code(
@@ -408,15 +556,32 @@ def get_expense_account_code(
     *,
     property_code: str = "",
     vendor_code: str = "",
+    vendor_name: str = "",
 ) -> str:
+    return get_expense_account_match(
+        english_desc,
+        property_code=property_code,
+        vendor_code=vendor_code,
+        vendor_name=vendor_name,
+    ).get("account", "NA")
+
+
+def get_expense_account_match(
+    english_desc: str,
+    *,
+    property_code: str = "",
+    vendor_code: str = "",
+    vendor_name: str = "",
+) -> dict[str, str | int]:
     with _DATA_LOCK:
         expense_df = df_expense
 
     english_desc = _clean_text(english_desc)
-    if expense_df.empty or not english_desc or "AccountCode" not in expense_df.columns:
-        return "NA"
+    if expense_df.empty or _is_missing_text(english_desc) or "AccountCode" not in expense_df.columns:
+        return {"account": "NA", "notes": "NA", "score": 0}
 
     candidates: list[pd.DataFrame] = []
+    combined_rows = pd.DataFrame()
     if property_code and property_code not in {"NA", "UNKNOWN"} and "Property" in expense_df.columns:
         property_rows = expense_df[
             expense_df["Property"].astype(str).str.lower() == property_code.lower()
@@ -445,26 +610,66 @@ def get_expense_account_code(
         if not combined_rows.empty:
             candidates.insert(0, combined_rows)
 
+    if vendor_name and vendor_name not in {"NA", "UNKNOWN"} and "PayeeName" in expense_df.columns:
+        vendor_name_rows = expense_df[
+            expense_df["PayeeName"].astype(str).str.lower() == vendor_name.lower()
+        ]
+        if not vendor_name_rows.empty:
+            candidates.append(vendor_name_rows)
+
     candidates.append(expense_df)
 
     for working_df in candidates:
-        best_account, best_score = _score_expense_accounts(working_df, english_desc)
-        logging.info("Expense account match account=%s score=%s", best_account, best_score)
-        if best_score >= config.EXPENSE_MATCH_THRESHOLD:
-            return best_account
+        match = _score_expense_accounts(working_df, english_desc)
+        logging.info(
+            "Expense account match account=%s score=%s notes=%r",
+            match["account"],
+            match["score"],
+            match["notes"],
+        )
+        if int(match["score"]) >= config.EXPENSE_MATCH_THRESHOLD:
+            return match
 
-    return "NA"
+    if not combined_rows.empty:
+        fallback_match = _most_common_expense_account(combined_rows)
+        logging.info(
+            "Expense account fallback account=%s notes=%r source=property+vendor-history",
+            fallback_match["account"],
+            fallback_match["notes"],
+        )
+        return fallback_match
+
+    return {"account": "NA", "notes": "NA", "score": 0}
 
 
-def _score_expense_accounts(working_df: pd.DataFrame, english_desc: str) -> tuple[str, int]:
+def _most_common_expense_account(working_df: pd.DataFrame) -> dict[str, str | int]:
+    account_series = working_df["AccountCode"].map(_normalise_account_code)
+    account_series = account_series[account_series.ne("NA")]
+    if account_series.empty:
+        return {"account": "NA", "notes": "NA", "score": 0}
+
+    account = str(account_series.value_counts().idxmax())
+    row = working_df[account_series.eq(account)].iloc[0]
+    notes = _clean_text(row.get("Notes")) if "Notes" in working_df.columns else ""
+    searchable = " ".join(
+        _clean_text(row.get(column))
+        for column in ("AccountName", "Notes", "PayeeName")
+        if column in working_df.columns
+    ).strip()
+    return {"account": account, "notes": notes or searchable or "NA", "score": 64}
+
+
+def _score_expense_accounts(working_df: pd.DataFrame, english_desc: str) -> dict[str, str | int]:
     best_score = -1
     best_account = "NA"
+    best_notes = "NA"
 
     for _, row in working_df.iterrows():
         account = _normalise_account_code(row.get("AccountCode"))
         if account == "NA":
             continue
 
+        notes = _clean_text(row.get("Notes")) if "Notes" in working_df.columns else ""
         searchable = " ".join(
             _clean_text(row.get(column))
             for column in ("AccountName", "Notes", "PayeeName")
@@ -477,5 +682,6 @@ def _score_expense_accounts(working_df: pd.DataFrame, english_desc: str) -> tupl
         if score > best_score:
             best_score = score
             best_account = account
+            best_notes = notes or searchable
 
-    return best_account, best_score
+    return {"account": best_account, "notes": best_notes or "NA", "score": best_score}

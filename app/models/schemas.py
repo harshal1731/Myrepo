@@ -1,13 +1,13 @@
 from pydantic import BaseModel
-from typing import Any, List
+from typing import Any, List, Union
 
 
 class InvoiceItem(BaseModel):
     TRANNUM: int
     ACCOUNT: str
     NOTES: str
-    AMOUNT: float
-    DETAILTAXAMOUNT1: float
+    AMOUNT: Union[float, str]
+    DETAILTAXAMOUNT1: Union[float, str]
 
 
 class YardiEtlData(BaseModel):
@@ -38,6 +38,7 @@ class YardiEtlData(BaseModel):
     FROMDATE: str
     TODATE: str
     EXPENSETYPE: str
+    DETAILNOTES: str
     DISPLAYTYPE: str
     ISCONSOLIDATECHECKS: int
     DETAILVATTRANTYPEID: str

@@ -3,8 +3,8 @@
   "vendor_file_name": "<invoice_file_name> and Vendor name ",
   "status": "Ready to Post", or Review If we got all the fields we will keep status to ready to post otherwise Review
   "etl_data": {
-    "PROPERTY": "Check master json in properties you will find data extract site code its acutually means yardi code with the help or mapping of PropertyName1 or PropertyName2 or Sitename",
-    "PERSON": "Check master json in vendors section extract RegisteredName Which means Person with help of TradingName which means vendor name ",
+    "PROPERTY": "Check master json for refernce only basically you have to read data from in memory loaded master files in properties you will find data extract site code its acutually means yardi code with the help or mapping of PropertyName1 or PropertyName2 or Sitename",
+    "PERSON": "Check master json for refernce only basically you have to read data from in memory loaded master files in vendors section extract RegisteredName Which means Person with help of TradingName which means vendor name ",
     "OFFSET": "Extract newcashaccount based on this json 
 [
   {
@@ -113,6 +113,12 @@ when you have to extract and mapping please remember from master json or expense
 site code = yardi code 
 TradingName = vendor name
 RegisteredName =  Person
+
+I have added master json just for my reference you don't need to read from that okay you have already loaded data read from that.
+
+I want final json will all 38 keys for etl_data and "vendor_file_name", "status".
+
+
 
 
 
