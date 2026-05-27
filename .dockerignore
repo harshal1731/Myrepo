@@ -8,6 +8,8 @@ __pycache__/
 env/
 venv/
 .venv/
+.env
+.env.*
 
 # Do not copy local uploaded files or logs into the fresh cloud container
 data/uploads/*

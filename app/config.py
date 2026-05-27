@@ -1,18 +1,32 @@
 import os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
-LOGS_DIR = os.path.join(BASE_DIR, "logs")
 
-for folder in [UPLOAD_DIR, LOGS_DIR]:
-    os.makedirs(folder, exist_ok=True)
+try:
+    from dotenv import load_dotenv
 
-# Dynamic File Paths (Uploaded via API)
-MASTER_COMBINED_PATH = os.path.join(UPLOAD_DIR, "Uploaded_Master_Combined.xlsx") 
-EXPENSE_REPORT_PATH = os.path.join(UPLOAD_DIR, "Uploaded_Expense_Report.xlsx")
+    load_dotenv(os.path.join(BASE_DIR, ".env"))
+except ImportError:
+    pass
 
-AZURE_ENDPOINT = "https://greystarinvociedataextractionuk.cognitiveservices.azure.com/"
-AZURE_KEY = "Bbatcj2ePCYZ6zdz5nnCIL3WsIfeZ9eyCQdOuAFolzvRo53R6X0dJQQJ99CAACmepeSXJ3w3AAALACOGhqPJ"
-AZURE_MODEL_NAME = "Greystar_common_logic_UK_v.1.3"
-# https://greystarinvociedataextractionuk.cognitiveservices.azure.com/documentintelligence/documentModels/Greystar_common_logic_UK_v.1.3:analyze
+# Keep the service stateless: uploaded workbooks/PDFs are never written to disk.
+LOGS_DIR = os.getenv("LOGS_DIR", os.path.join(BASE_DIR, "logs"))
+LOG_TO_FILE = os.getenv("LOG_TO_FILE", "false").lower() in {"1", "true", "yes"}
+
+if LOG_TO_FILE:
+    os.makedirs(LOGS_DIR, exist_ok=True)
+
+AZURE_ENDPOINT = os.getenv(
+    "AZURE_ENDPOINT",
+    "https://greystarinvociedataextractionuk.cognitiveservices.azure.com/",
+).rstrip("/") + "/"
+AZURE_KEY = os.getenv("AZURE_KEY", "")
+AZURE_MODEL_NAME = os.getenv("AZURE_MODEL_NAME", "Greystar_common_logic_v.1.3")
+AZURE_FALLBACK_MODEL_NAME = os.getenv("AZURE_FALLBACK_MODEL_NAME", "prebuilt-invoice")
+AZURE_API_VERSION = os.getenv("AZURE_API_VERSION", "2024-11-30")
+AZURE_POLL_INTERVAL_SECONDS = float(os.getenv("AZURE_POLL_INTERVAL_SECONDS", "2"))
+AZURE_POLL_TIMEOUT_SECONDS = int(os.getenv("AZURE_POLL_TIMEOUT_SECONDS", "120"))
+
+NLLB_MODEL_NAME = os.getenv("NLLB_MODEL_NAME", "facebook/nllb-200-distilled-600M")
+FUZZY_MATCH_THRESHOLD = int(os.getenv("FUZZY_MATCH_THRESHOLD", "80"))
+EXPENSE_MATCH_THRESHOLD = int(os.getenv("EXPENSE_MATCH_THRESHOLD", "65"))

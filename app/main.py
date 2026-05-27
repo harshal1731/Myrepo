@@ -2,16 +2,17 @@ import logging
 import os
 from fastapi import FastAPI
 from app.api.routes import router
-from app.config import LOGS_DIR
+from app.config import LOGS_DIR, LOG_TO_FILE
 
 # Setup Application-Wide Logging
+handlers = [logging.StreamHandler()]
+if LOG_TO_FILE:
+    handlers.append(logging.FileHandler(os.path.join(LOGS_DIR, "api_errors.log")))
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.FileHandler(os.path.join(LOGS_DIR, "api_errors.log")),
-        logging.StreamHandler()
-    ]
+    handlers=handlers,
 )
 
 # Silence noisy background libraries

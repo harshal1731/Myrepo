@@ -1,10 +1,13 @@
 fastapi
-uvicorn
+uvicorn[standard]
 python-multipart
+python-dotenv
 requests
 pandas
+python-dateutil
 openpyxl
 thefuzz
 transformers
 torch
+sentencepiece
 pydantic
