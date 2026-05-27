@@ -251,6 +251,10 @@ def _numeric_or_na(value: Any) -> float | str:
     return "NA" if value in (None, "") else _safe_float(value)
 
 
+def _has_value(value: Any) -> bool:
+    return value not in (None, "", "NA")
+
+
 def _currency_numeric_or_na(field: Any) -> float | str:
     if field in (None, ""):
         return "NA"
@@ -347,6 +351,197 @@ def _currency_code(fields: dict[str, Any]) -> str:
     return str(_lookup_field(fields, ["Currency", "InvoiceCurrency", "TranCurrency"]) or "EUR")
 
 
+def _clean_ocr_lines(text: str) -> list[str]:
+    return [
+        re.sub(r"\s+", " ", line).strip()
+        for line in str(text or "").splitlines()
+        if re.sub(r"\s+", " ", line).strip()
+    ]
+
+
+def _value_after_label(lines: list[str], label_pattern: str) -> str | None:
+    pattern = re.compile(label_pattern, re.IGNORECASE)
+    for index, line in enumerate(lines):
+        match = pattern.search(line)
+        if not match:
+            continue
+        tail = line[match.end():].strip(" :-")
+        if tail:
+            return tail
+        for candidate in lines[index + 1 : index + 4]:
+            if candidate and not re.match(r"^[A-Za-z ]+:?$", candidate):
+                return candidate
+    return None
+
+
+def _raw_invoice_number(lines: list[str]) -> str | None:
+    value = _value_after_label(lines, r"\binvoice\s*(?:number|no\.?|#)\b|\bfactuurnummer\b|\bnummer\b")
+    if value:
+        return value
+    for line in lines:
+        match = re.search(r"\b[A-Z]{1,4}\s*INV[-\s]?\d+\b|\b\d{4}\s*/\s*\d+\b|\bV\d{6,}\b", line, re.IGNORECASE)
+        if match:
+            return match.group(0).strip()
+    return None
+
+
+def _raw_labeled_date(lines: list[str], labels: tuple[str, ...]) -> str | None:
+    label_pattern = "|".join(labels)
+    value = _value_after_label(lines, label_pattern)
+    if value:
+        match = re.search(
+            r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2}",
+            value,
+        )
+        return match.group(0) if match else value
+    return None
+
+
+def _raw_total_amount(lines: list[str]) -> float | str:
+    label_patterns = (
+        r"invoice\s+total",
+        r"amount\s+due",
+        r"te\s+betalen",
+        r"totaal\s+incl",
+        r"totaalbedrag",
+    )
+    for index, line in enumerate(lines):
+        if not any(re.search(pattern, line, re.IGNORECASE) for pattern in label_patterns):
+            continue
+        candidates = [line, *lines[index + 1 : index + 4]]
+        for candidate in candidates:
+            amounts = re.findall(r"\(?[-+]?\d{1,3}(?:[.,]\d{3})*[.,]\d{2}\)?", candidate)
+            if amounts:
+                return _safe_float(amounts[-1])
+    return "NA"
+
+
+def _raw_total_tax(lines: list[str]) -> float | str:
+    for index, line in enumerate(lines):
+        if re.search(r"\b(?:total\s+)?(?:vat|btw)\b", line, re.IGNORECASE):
+            candidates = [line, *lines[index + 1 : index + 3]]
+            for candidate in candidates:
+                amounts = re.findall(r"\(?[-+]?\d{1,3}(?:[.,]\d{3})*[.,]\d{2}\)?", candidate)
+                if amounts:
+                    return _safe_float(amounts[-1])
+    if any(re.search(r"\bzero\s+rated\b", line, re.IGNORECASE) for line in lines):
+        return 0.0
+    return "NA"
+
+
+def _raw_vendor_name(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\b[A-Z][A-Za-z0-9&.' -]+\s+(?:B\.?V\.?|Limited|Ltd\.?|Incasso B\.?V\.?)\b", line)
+        if match and not re.search(r"\bGS Netherlands\b", match.group(0), re.IGNORECASE):
+            return match.group(0).strip()
+    if "INVOICE" in [line.upper() for line in lines]:
+        invoice_index = [line.upper() for line in lines].index("INVOICE")
+        for line in lines[:invoice_index]:
+            if len(line) > 2 and not re.search(r"\bGLOBAL GROUP\b", line, re.IGNORECASE):
+                return line
+    return None
+
+
+def _raw_property_name(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\b(?:GS Netherlands|OCO|Orange House)[A-Za-z0-9 .'-]*(?:B\.?V\.?|C\.?V\.?)\b", line, re.IGNORECASE)
+        if match:
+            return match.group(0).strip()
+    return None
+
+
+def _is_money_line(line: str) -> bool:
+    return bool(re.fullmatch(r"\(?[-+]?\d{1,3}(?:[.,]\d{3})*[.,]\d{2}\)?", line.strip()))
+
+
+def _is_quantity_line(line: str) -> bool:
+    return bool(re.fullmatch(r"\d+(?:[.,]\d+)?", line.strip()))
+
+
+def _raw_line_items(lines: list[str]) -> list[dict[str, Any]]:
+    start = None
+    for index, line in enumerate(lines):
+        if re.fullmatch(r"services|omschrijving|beschrijving|description", line, re.IGNORECASE):
+            start = index + 1
+            break
+    if start is None:
+        return []
+
+    for index in range(start, min(start + 8, len(lines))):
+        if re.search(r"\bamount\b|\bbedrag\b|\btotaal\b", lines[index], re.IGNORECASE):
+            start = index + 1
+            break
+
+    stop_words = re.compile(r"^(subtotal|totaal|invoice total|amount due|vat rates|btw|for payment)\b", re.IGNORECASE)
+    rows: list[dict[str, Any]] = []
+    description_parts: list[str] = []
+    index = start
+    while index < len(lines):
+        line = lines[index]
+        if stop_words.search(line):
+            break
+        if _is_quantity_line(line) and description_parts:
+            rate = lines[index + 1] if index + 1 < len(lines) else ""
+            vat_text = lines[index + 2] if index + 2 < len(lines) else ""
+            amount_text = lines[index + 3] if index + 3 < len(lines) else ""
+            if _is_money_line(rate) and amount_text and _is_money_line(amount_text):
+                rows.append(
+                    {
+                        "Description_Dutch": " ".join(description_parts),
+                        "Amount": _safe_float(amount_text),
+                        "Tax_Amount": 0.0 if re.search(r"\bzero\s+rated\b|\b0\s*%", vat_text, re.IGNORECASE) else "NA",
+                        "VAT_Rate": "0%" if re.search(r"\bzero\s+rated\b|\b0\s*%", vat_text, re.IGNORECASE) else vat_text or None,
+                    }
+                )
+                description_parts = []
+                index += 4
+                continue
+        if not _is_money_line(line):
+            description_parts.append(line)
+        index += 1
+    return rows
+
+
+def _apply_raw_text_fallbacks(parsed: dict[str, Any], raw_text: str) -> dict[str, Any]:
+    lines = _clean_ocr_lines(raw_text)
+    if not lines:
+        return parsed
+
+    fallbacks = {
+        "Invoice_Number": _raw_invoice_number(lines),
+        "Vendor_Name": _raw_vendor_name(lines),
+        "Property_Name": _raw_property_name(lines),
+        "Invoice_Date": _raw_labeled_date(lines, (r"\binvoice\s+date\b", r"\bfactuurdatum\b", r"\bdatum\b")),
+        "Due_Date": _raw_labeled_date(lines, (r"\bdue\s+date\b", r"\bvervaldatum\b")),
+        "Amount": _raw_total_amount(lines),
+        "Tax_Amount": _raw_total_tax(lines),
+    }
+    for key, value in fallbacks.items():
+        if not _has_value(parsed.get(key)) and _has_value(value):
+            parsed[key] = value
+
+    if not _has_value(parsed.get("Description_Dutch")):
+        notes = _value_after_label(lines, r"\bnotes?\b")
+        parsed["Description_Dutch"] = notes or parsed.get("Description_Dutch") or ""
+
+    if not parsed.get("InvoiceItems"):
+        parsed["InvoiceItems"] = _raw_line_items(lines)
+        if not parsed["InvoiceItems"] and _has_value(parsed.get("Amount")):
+            parsed["InvoiceItems"] = [
+                {
+                    "Description_Dutch": parsed.get("Description_Dutch") or "Invoice total",
+                    "Amount": parsed["Amount"],
+                    "Tax_Amount": parsed.get("Tax_Amount") if _has_value(parsed.get("Tax_Amount")) else "NA",
+                    "VAT_Rate": parsed.get("VAT_Rate"),
+                }
+            ]
+
+    if parsed.get("IBAN") == "NA":
+        parsed["IBAN"] = _iban_from_text(raw_text)
+
+    return parsed
+
+
 def _extract_invoice_items(fields: dict[str, Any]) -> list[dict[str, Any]]:
     items_field = _lookup_raw_field(fields, ["Items", "InvoiceItems"])
     if not isinstance(items_field, dict):
@@ -406,7 +601,7 @@ def parse_azure_response(result: dict) -> dict:
     raw_text = result.get("analyzeResult", {}).get("content", "") or ""
     if not docs:
         logging.warning("Azure returned no document records.")
-        return {
+        parsed = {
             "Invoice_Number": "NA",
             "Vendor_Name": "NA",
             "Property_Name": "NA",
@@ -421,6 +616,7 @@ def parse_azure_response(result: dict) -> dict:
             "InvoiceItems": [],
             "Raw_Text": raw_text,
         }
+        return _apply_raw_text_fallbacks(parsed, raw_text)
 
     fields = docs[0].get("fields", {}) or {}
     logging.info("Azure OCR fields extracted: %s", sorted(fields.keys()))
@@ -436,7 +632,7 @@ def parse_azure_response(result: dict) -> dict:
         if item.get("Description_Dutch")
     )
 
-    return {
+    parsed = {
         "Invoice_Number": _lookup_field(
             fields,
             ["InvoiceId", "InvoiceNumber", "Invoice Number", "invoice_number", "Reference"],
@@ -486,3 +682,4 @@ def parse_azure_response(result: dict) -> dict:
         "InvoiceItems": invoice_items,
         "Raw_Text": raw_text,
     }
+    return _apply_raw_text_fallbacks(parsed, raw_text)
