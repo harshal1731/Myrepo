@@ -12,39 +12,47 @@ Task: Carefully analyze, audit, and verify the provided codebase for a real esta
    - Storage Constraint: 100% IN-MEMORY (RAM) processing. Persistent volume mounts are NOT used. All uploaded Excel files must be read directly from byte streams using `io.BytesIO` into global Pandas DataFrames. No files are saved to the container's disk.
 
 2. Inputs & Endpoints:
-   - Endpoint 1: POST `/api/upload-expense-report`
-     - Accepts optional `master_file` (UploadFile) and `expense_file` (UploadFile).
-     - `master_file` contains two sheets: 'Vendor name Phase -1' and 'Master tracker (Entities)'. Must be read, have blank rows removed, and have merged cells (including 'Unit Size' and 'Head office') forward-filled using `.ffill()`.
-     - `expense_file` contains the Expense Distribution report. Must be read with `header=4` (Row 5) and have blank rows dropped.
-   - Endpoint 2: POST `/api/process-invoice`
+   - Endpoint 1: POST `/api/update-master-data`
+     - Accepts a JSON payload containing dynamic master data from .NET and loads it into memory.
+     - Decoupled Payload: Renames .NET JSON keys dynamically to internal Pandas names.
+       - Vendors: "RegisteredName" (maps to internal "PERSON") and "TradingName" (maps to internal "Vendor name").
+       - Properties: "SiteCode" (maps to internal "Yardi code") and "PropertyName1" (maps to internal "Property name").
+   - Endpoint 2: POST `/api/upload-expense-report`
+     - Accepts optional `expense_file` (UploadFile) of the Expense Distribution report. Must be read with `header=4` (Row 5) and have blank rows dropped.
+   - Endpoint 3: POST `/api/process-invoice`
      - Accepts a PDF invoice (UploadFile).
-     - Sends bytes to Azure Custom Model 'Greystar_common_logic_v.1.3'.
+     - Sends bytes to Azure Custom Model 'Greystar_common_logic_v.1.3' (with fallback to 'prebuilt-invoice').
      - Extracts Dutch descriptions and translates them locally to English using the NLLB model.
      - Performs fuzzy matching using `thefuzz` against the in-memory Master Tracker and Vendor List to find Yardi Property and Vendor (Person) codes.
-     - Generates a flat JSON payload with exactly 38 Yardi fields (detailed below) plus two wrapper fields ('vendor_file_name', 'status').
+     - Generates a nested, hierarchical JSON payload separating header-level fields from an array of line items (`InvoiceItems`), plus two root-level wrapper fields ('vendor_file_name', 'status').
 
-3. Business Rules & 38-Field ETL Mapping:
-   - 'TRANNUM': Always 1.
+3. Business Rules & Nested ETL Mapping:
+
+   A. Header-Level Fields (inside `etl_data`):
    - 'PROPERTY': Yardi property code matched from Master Tracker.
    - 'PERSON': Yardi vendor (PERSON) code matched from Vendor sheet.
    - 'OFFSET': Default to '11020000'.
-   - 'AMOUNT': Invoice total amount (numeric).
-   - 'DATE': Invoice date (formatted as DD/MM/YYYY).
    - 'DUEDATE': If vendor starts with 'Greystar Netherlands', same as Invoice Date. Otherwise, Invoice Date + 30 days. Format: DD/MM/YYYY.
+   - 'DATE': Invoice date (formatted as DD/MM/YYYY).
    - 'POSTMONTH': Derived from Invoice Date as MM/YYYY.
    - 'ACCOUNT': Mapped dynamically from the uploaded Expense Report using keyword/semantic matching against the English description.
    - 'ACCRUAL': Default to '21010000'.
-   - 'NOTES' & 'DETAILNOTES': English translated invoice description.
    - 'REF': Extracted Invoice Number.
    - 'SEGMENT1' to 'SEGMENT12', 'EXCHANGERATE', 'EXCHANGERATEDATE', 'TAXAMOUNT1', 'TAXAMOUNT2': All default to "NA".
    - 'FROMDATE' & 'TODATE': Extracted from English description; if missing, defaults to Invoice Date (DD/MM/YYYY).
    - 'EXPENSETYPE': Default to "Expense (Opex)".
+   - 'DETAILNOTES': English translated invoice description.
    - 'DISPLAYTYPE': Default to "NLVatApplicablePayable".
    - 'ISCONSOLIDATECHECKS': Default to -1.
    - 'DETAILVATTRANTYPEID': Default to "apresex".
-   - 'DETAILTAXAMOUNT1': Extracted Tax Amount (numeric).
    - 'DETAILVATRATEID': If Tax Amount is 0, "Zero Rated", else "Uksr".
    - 'INTERNATIONALPAYMENTTYPE': Default to "EFT" (or "Cheque" if IBAN begins with 'GB' or currency is non-Euro).
+
+   B. Line-Level Fields (inside `InvoiceItems` array):
+   - 'TRANNUM': Incremental sequence number starting at 1 per line item.
+   - 'NOTES': English translated description of the specific line item.
+   - 'AMOUNT': Line-level amount (numeric).
+   - 'DETAILTAXAMOUNT1': Line-level tax amount (numeric).
 
 4. Validation & Status Rules:
    - If any mandatory field ('PROPERTY', 'PERSON', 'AMOUNT', 'ACCOUNT', 'REF') is missing, "NA", "UNKNOWN", or 0.0, the root level 'status' field must be set to "In Review".
@@ -52,24 +60,77 @@ Task: Carefully analyze, audit, and verify the provided codebase for a real esta
 
 ---
 
-### AUDIT CHECKLIST FOR CODEX
+### TARGET HIERARCHICAL JSON STRUCTURE
 
+The final JSON output returned by `/api/process-invoice` must match this exact schema [3]:
+
+```json
+{
+  "vendor_file_name": "Invoice_12345.pdf",
+  "status": "Ready to Post",
+  "etl_data": {
+    "PROPERTY": "nlcdresi",
+    "PERSON": "nlteccoe",
+    "OFFSET": "11020000",
+    "DUEDATE": "19/06/2026",
+    "DATE": "20/05/2026",
+    "POSTMONTH": "05/2026",
+    "ACCOUNT": "52190000",
+    "ACCRUAL": "21010000",
+    "REF": "INV-12345",
+    "SEGMENT1": "NA",
+    "SEGMENT2": "NA",
+    "SEGMENT3": "NA",
+    "SEGMENT4": "NA",
+    "SEGMENT5": "NA",
+    "SEGMENT6": "NA",
+    "SEGMENT7": "NA",
+    "SEGMENT8": "NA",
+    "SEGMENT9": "NA",
+    "SEGMENT10": "NA",
+    "SEGMENT11": "NA",
+    "SEGMENT12": "NA",
+    "EXCHANGERATE": "NA",
+    "EXCHANGERATEDATE": "NA",
+    "TAXAMOUNT1": "NA",
+    "TAXAMOUNT2": "NA",
+    "FROMDATE": "20/05/2026",
+    "TODATE": "20/05/2026",
+    "EXPENSETYPE": "Expense (Opex)",
+    "DETAILNOTES": "Monthly cleaning fees translated to English",
+    "DISPLAYTYPE": "NLVatApplicablePayable",
+    "ISCONSOLIDATECHECKS": -1,
+    "DETAILVATTRANTYPEID": "apresex",
+    "DETAILVATRATEID": "Uksr",
+    "INTERNATIONALPAYMENTTYPE": "EFT",
+    "InvoiceItems": [
+      {
+        "TRANNUM": 1,
+        "NOTES": "Monthly cleaning fees",
+        "AMOUNT": 250.50,
+        "DETAILTAXAMOUNT1": 43.47
+      },
+      {
+        "TRANNUM": 2,
+        "NOTES": "Monthly cleaning fees",
+        "AMOUNT": 266.50,
+        "DETAILTAXAMOUNT1": 43.47
+      }
+    ]
+  }
+}
+
+AUDIT CHECKLIST FOR CODEX
 Please review the attached files and verify the following:
-1. Memory leaks: Does the in-memory pandas loading (`io.BytesIO`) clean up correctly?
-2. Data Mappings: Are all 38 Yardi fields present and formatted exactly as required? Is the date logic robust (no crashes on missing/malformed dates)?
-3. Custom Model OCR Parsing: Is the JSON extraction from the custom model payload robust against missing fields or keys?
-4. Type Integrity: Are numeric fields (Amount, Tax) safely converted to floats?
-5. Imports & Dependencies: Are there any missing imports, mismatched variable names, or unhandled exceptions across the files?
-6. Docker: Does the Dockerfile expose the correct port and use production-ready execution commands?
-
----
-
-### MY CODEBASE FILES:
-
+Memory leaks: Does the in-memory pandas loading (io.BytesIO) clean up correctly?
+Hierarchical Validation: Are the Pydantic models in schemas.py and the mapping logic in mapper_service.py correctly structured to validate this nested header-line payload?
+Data Mappings: Are all Yardi fields present and formatted exactly as required across both levels? Is the date logic robust?
+Custom Model OCR Parsing: Is the JSON extraction robust against missing fields or keys, and can it fallback between the custom model and 'prebuilt-invoice'?
+Type Integrity: Are numeric fields safely converted to floats?
+Imports & Dependencies: Are there any missing imports, mismatched variable names, or unhandled exceptions across the files?
+Docker: Does the Dockerfile expose the correct port and use production-ready execution commands?
+MY CODEBASE FILES:
 [PASTE YOUR CODE FILES HERE (e.g., config.py, main.py, routes.py, ocr_service.py, excel_service.py, mapper_service.py, schemas.py, Dockerfile)]
-
----
-
 Please analyze the codebase and provide a detailed report on:
-1. Any logical gaps, potential bugs, or missing requirements found.
-2. The corrected/refactored code blocks for any files that need modification.
+Any logical gaps, potential bugs, or missing requirements found.
+The corrected/refactored code blocks for any files that need modification.
