@@ -4,6 +4,7 @@ from typing import Any, List
 
 class InvoiceItem(BaseModel):
     TRANNUM: int
+    ACCOUNT: str
     NOTES: str
     AMOUNT: float
     DETAILTAXAMOUNT1: float
@@ -16,7 +17,6 @@ class YardiEtlData(BaseModel):
     DUEDATE: str
     DATE: str
     POSTMONTH: str
-    ACCOUNT: str
     ACCRUAL: str
     REF: str
     SEGMENT1: str
@@ -38,7 +38,6 @@ class YardiEtlData(BaseModel):
     FROMDATE: str
     TODATE: str
     EXPENSETYPE: str
-    DETAILNOTES: str
     DISPLAYTYPE: str
     ISCONSOLIDATECHECKS: int
     DETAILVATTRANTYPEID: str

@@ -10,6 +10,7 @@ from app.services.excel_service import (
     get_property_yardi_code,
     get_vendor_person_code,
 )
+from app import config
 
 YARDI_HEADER_FIELD_NAMES = [
     "PROPERTY",
@@ -18,7 +19,6 @@ YARDI_HEADER_FIELD_NAMES = [
     "DUEDATE",
     "DATE",
     "POSTMONTH",
-    "ACCOUNT",
     "ACCRUAL",
     "REF",
     "SEGMENT1",
@@ -40,7 +40,6 @@ YARDI_HEADER_FIELD_NAMES = [
     "FROMDATE",
     "TODATE",
     "EXPENSETYPE",
-    "DETAILNOTES",
     "DISPLAYTYPE",
     "ISCONSOLIDATECHECKS",
     "DETAILVATTRANTYPEID",
@@ -48,7 +47,7 @@ YARDI_HEADER_FIELD_NAMES = [
     "INTERNATIONALPAYMENTTYPE",
     "InvoiceItems",
 ]
-INVOICE_ITEM_FIELD_NAMES = ["TRANNUM", "NOTES", "AMOUNT", "DETAILTAXAMOUNT1"]
+INVOICE_ITEM_FIELD_NAMES = ["TRANNUM", "ACCOUNT", "NOTES", "AMOUNT", "DETAILTAXAMOUNT1"]
 YARDI_FIELD_NAMES = YARDI_HEADER_FIELD_NAMES
 
 _MISSING_TEXT = {"", "NA", "N/A", "NONE", "NULL", "UNKNOWN", "NAN"}
@@ -206,6 +205,62 @@ def _payment_type(ocr_data: dict) -> str:
     return "EFT"
 
 
+def _extract_vat_rate(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        rate = float(value)
+        return rate * 100 if 0 < rate < 1 else rate
+
+    text = str(value).strip()
+    if text.upper() in _MISSING_TEXT:
+        return None
+
+    match = re.search(r"(\d+(?:[.,]\d+)?)\s*%?", text)
+    if not match:
+        return None
+
+    try:
+        rate = float(match.group(1).replace(",", "."))
+        return rate * 100 if 0 < rate < 1 else rate
+    except ValueError:
+        return None
+
+
+def _vat_rate_id(ocr_data: dict, invoice_items: list[dict[str, Any]]) -> str:
+    candidate_values = [
+        ocr_data.get("VAT_Rate"),
+        ocr_data.get("VatRate"),
+        ocr_data.get("Tax_Rate"),
+        ocr_data.get("TaxRate"),
+    ]
+    for item in _raw_items(ocr_data):
+        candidate_values.extend(
+            [
+                item.get("VAT_Rate"),
+                item.get("VatRate"),
+                item.get("Tax_Rate"),
+                item.get("TaxRate"),
+            ]
+        )
+
+    for value in candidate_values:
+        rate = _extract_vat_rate(value)
+        if rate is None:
+            continue
+        if abs(rate - 0.0) < 0.01:
+            return "Uk0"
+        if abs(rate - 21.0) < 0.01:
+            return "Uksr"
+        if abs(rate - 9.0) < 0.01:
+            return config.VAT_RATE_9_ID
+        return "NA"
+
+    if _line_tax_total(invoice_items) == 0.0 and safe_float(ocr_data.get("Tax_Amount")) == 0.0:
+        return "Uk0"
+    return "NA"
+
+
 def _item_text(item: dict[str, Any], fallback: str) -> str:
     return _text_or_na(
         item.get("Description_English")
@@ -271,6 +326,7 @@ def _build_invoice_items(ocr_data: dict, english_desc: str) -> list[dict[str, An
         invoice_items.append(
             {
                 "TRANNUM": index,
+                "ACCOUNT": "NA",
                 "NOTES": _item_text(item, english_desc),
                 "AMOUNT": amount,
                 "DETAILTAXAMOUNT1": tax_amount,
@@ -285,13 +341,15 @@ def _line_tax_total(invoice_items: list[dict[str, Any]]) -> float:
 
 
 def _status(etl_data: dict[str, Any]) -> str:
-    if any(_is_missing(etl_data.get(field)) for field in ("PROPERTY", "PERSON", "ACCOUNT", "REF")):
+    if any(_is_missing(etl_data.get(field)) for field in ("PROPERTY", "PERSON", "REF")):
         return "In Review"
 
     invoice_items = etl_data.get("InvoiceItems")
     if not isinstance(invoice_items, list) or not invoice_items:
         return "In Review"
     if any(not isinstance(item, dict) for item in invoice_items):
+        return "In Review"
+    if any(_is_missing(item.get("ACCOUNT")) for item in invoice_items):
         return "In Review"
     if any(_is_missing(item.get("AMOUNT")) for item in invoice_items):
         return "In Review"
@@ -307,7 +365,15 @@ def generate_yardi_payload(ocr_data: dict, original_filename: str) -> dict:
 
     date_formatted = _format_date(invoice_dt)
     post_month = _format_post_month(invoice_dt)
-    if invoice_dt and raw_vendor_name.lower().startswith("greystar netherlands"):
+    due_dt = parse_date(
+        ocr_data.get("Due_Date")
+        or ocr_data.get("DueDate")
+        or ocr_data.get("Invoice_Due_Date")
+        or ocr_data.get("PaymentDueDate")
+    )
+    if due_dt:
+        due_date_formatted = _format_date(due_dt)
+    elif invoice_dt and raw_vendor_name.lower().startswith("greystar netherlands"):
         due_date_formatted = _format_date(invoice_dt)
     elif invoice_dt:
         due_date_formatted = _format_date(invoice_dt + timedelta(days=30))
@@ -315,23 +381,38 @@ def generate_yardi_payload(ocr_data: dict, original_filename: str) -> dict:
         due_date_formatted = "NA"
 
     invoice_items = _build_invoice_items(ocr_data, english_desc)
-    tax_amt = safe_float(ocr_data.get("Tax_Amount"))
-    if tax_amt == 0.0:
-        tax_amt = _line_tax_total(invoice_items)
-
     property_query = (
         ocr_data.get("Property_Name")
         or ocr_data.get("Property_Address")
         or ocr_data.get("CustomerAddress")
         or ""
     )
-    yardi_property_code = get_property_yardi_code(property_query)
+    unit_number = (
+        ocr_data.get("Unit_Number")
+        or ocr_data.get("UnitNumber")
+        or ocr_data.get("Apartment_Number")
+        or ocr_data.get("ApartmentNumber")
+        or ""
+    )
+    yardi_property_code = get_property_yardi_code(
+        property_query,
+        unit_number=unit_number,
+        vendor_name=raw_vendor_name,
+    )
     person_code, _ = get_vendor_person_code(raw_vendor_name)
     gl_account = get_expense_account_code(
         english_desc,
         property_code=yardi_property_code,
         vendor_code=person_code,
     )
+    for item in invoice_items:
+        item_account = get_expense_account_code(
+            item.get("NOTES", english_desc),
+            property_code=yardi_property_code,
+            vendor_code=person_code,
+        )
+        item["ACCOUNT"] = item_account if item_account != "NA" else gl_account
+
     from_date, to_date = extract_dates_from_text(english_desc, date_formatted)
 
     etl_data = {
@@ -341,7 +422,6 @@ def generate_yardi_payload(ocr_data: dict, original_filename: str) -> dict:
         "DUEDATE": due_date_formatted,
         "DATE": date_formatted,
         "POSTMONTH": post_month,
-        "ACCOUNT": gl_account,
         "ACCRUAL": "21010000",
         "REF": _text_or_na(ocr_data.get("Invoice_Number")),
         "SEGMENT1": "NA",
@@ -363,11 +443,10 @@ def generate_yardi_payload(ocr_data: dict, original_filename: str) -> dict:
         "FROMDATE": from_date,
         "TODATE": to_date,
         "EXPENSETYPE": "Expense (Opex)",
-        "DETAILNOTES": english_desc,
         "DISPLAYTYPE": "NLVatApplicablePayable",
         "ISCONSOLIDATECHECKS": -1,
         "DETAILVATTRANTYPEID": "apresex",
-        "DETAILVATRATEID": "Zero Rated" if tax_amt == 0.0 else "Uksr",
+        "DETAILVATRATEID": _vat_rate_id(ocr_data, invoice_items),
         "INTERNATIONALPAYMENTTYPE": _payment_type(ocr_data),
         "InvoiceItems": invoice_items,
     }

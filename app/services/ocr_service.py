@@ -247,11 +247,16 @@ def _extract_invoice_items(fields: dict[str, Any]) -> list[dict[str, Any]]:
             item_obj,
             ["Tax", "TaxAmount", "VAT", "VATAmount", "TotalTax", "btw"],
         )
+        vat_rate = _lookup_field(
+            item_obj,
+            ["VATRate", "VatRate", "TaxRate", "Tax Rate", "btw percentage"],
+        )
         invoice_items.append(
             {
                 "Description_Dutch": str(description).replace("\n", " ") if description else "",
                 "Amount": _safe_float(amount),
                 "Tax_Amount": _safe_float(tax_amount),
+                "VAT_Rate": vat_rate,
             }
         )
 
@@ -269,6 +274,7 @@ def parse_azure_response(result: dict) -> dict:
             "Invoice_Date": None,
             "Amount": 0.0,
             "Tax_Amount": 0.0,
+            "VAT_Rate": None,
             "Description_Dutch": "",
             "IBAN": "NA",
             "Currency": "EUR",
@@ -310,13 +316,29 @@ def parse_azure_response(result: dict) -> dict:
                 "issue",
             ],
         ) or "NA",
+        "Unit_Number": _lookup_field(
+            fields,
+            [
+                "UnitNumber",
+                "Unit Number",
+                "ApartmentNumber",
+                "Apartment Number",
+                "RoomNumber",
+                "Room Number",
+            ],
+        ) or "NA",
         "Invoice_Date": _lookup_field(fields, ["InvoiceDate", "Invoice Date", "date", "Date"]),
+        "Due_Date": _lookup_field(
+            fields,
+            ["DueDate", "Due Date", "PaymentDueDate", "Payment Due Date", "InvoiceDueDate"],
+        ),
         "Amount": _safe_float(
             _lookup_field(fields, ["InvoiceTotal", "Invoice Total", "TotalAmount", "amount", "Amount"])
         ),
         "Tax_Amount": _safe_float(
             _lookup_field(fields, ["TotalTax", "VAT", "VATAmount", "Tax", "btw", "vat"])
         ),
+        "VAT_Rate": _lookup_field(fields, ["VATRate", "VatRate", "TaxRate", "Tax Rate", "btw percentage"]),
         "Description_Dutch": " | ".join(descriptions),
         "IBAN": _lookup_field(fields, ["IBAN", "BankAccount", "Bank Account"]) or "NA",
         "Currency": _currency_code(fields),

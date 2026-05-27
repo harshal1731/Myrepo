@@ -99,6 +99,14 @@ _PROPERTY_COLUMNS = {
     "Site address": ["SiteAddress", "Site Address", "Address", "Property Address"],
     "Head office": ["HeadOffice", "Head office", "Head Office"],
     "Unit Size": ["UnitSize", "Unit Size"],
+    "Unit Number": [
+        "UnitNumber",
+        "Unit Number",
+        "Unit",
+        "Apartment",
+        "ApartmentNumber",
+        "Apartment Number",
+    ],
 }
 
 _EXPENSE_COLUMNS = {
@@ -330,12 +338,35 @@ def get_vendor_person_code(raw_vendor_name: str) -> tuple[str, str]:
     return person or "NA", best_text
 
 
-def get_property_yardi_code(raw_property_name: str) -> str:
+def get_property_yardi_code(
+    raw_property_name: str,
+    *,
+    unit_number: str = "",
+    vendor_name: str = "",
+) -> str:
     with _DATA_LOCK:
         master_df = df_master
 
     raw_property_name = _clean_text(raw_property_name)
-    if master_df.empty or not raw_property_name:
+    unit_number = _clean_text(unit_number)
+    vendor_name = _clean_text(vendor_name)
+    if master_df.empty:
+        return "NA"
+
+    if (
+        vendor_name.lower().startswith("eteck incasso b.v")
+        and unit_number
+        and "Unit Number" in master_df.columns
+    ):
+        unit_rows = master_df[
+            master_df["Unit Number"].astype(str).str.strip().str.lower()
+            == unit_number.lower()
+        ]
+        if not unit_rows.empty:
+            yardi_code = _clean_text(unit_rows.iloc[0].get("Yardi code"))
+            return yardi_code or "NA"
+
+    if not raw_property_name:
         return "NA"
 
     match_columns = [
