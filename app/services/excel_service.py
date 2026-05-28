@@ -2,14 +2,13 @@ import io
 import logging
 import re
 import threading
+from difflib import SequenceMatcher
 from typing import Any
 
 import pandas as pd
 try:
     from thefuzz import fuzz, process
 except ImportError:  # pragma: no cover - production installs thefuzz from requirements.
-    from difflib import SequenceMatcher
-
     class _FallbackFuzz:
         @staticmethod
         def WRatio(left: str, right: str) -> int:
@@ -143,6 +142,27 @@ def _word_tokens(value: Any) -> set[str]:
         for token in re.findall(r"[a-z0-9]+", str(value or "").lower())
         if len(token) > 1 and token not in stop_words
     }
+
+
+def _vendor_match_key(value: Any) -> str:
+    tokens = sorted(_word_tokens(value))
+    return " ".join(tokens) if tokens else _normalise_name(value)
+
+
+def _has_vendor_token_similarity(query: str, candidate: str) -> bool:
+    query_tokens = _word_tokens(query)
+    candidate_tokens = _word_tokens(candidate)
+    if not query_tokens or not candidate_tokens:
+        return False
+    if query_tokens & candidate_tokens:
+        return True
+    return any(
+        len(left) >= 5
+        and len(right) >= 5
+        and SequenceMatcher(None, left, right).ratio() >= 0.88
+        for left in query_tokens
+        for right in candidate_tokens
+    )
 
 
 def _has_value(series: pd.Series) -> pd.Series:
@@ -342,26 +362,28 @@ def get_vendor_person_code(raw_vendor_name: str) -> tuple[str, str]:
     if vendor_df.empty or _is_missing_text(raw_vendor_name):
         return "NA", raw_vendor_name or "NA"
 
-    choices: list[tuple[str, int]] = []
+    choices: list[tuple[str, int, str]] = []
     for row_index, row in vendor_df.iterrows():
         for column in ("Vendor name", "PayeeName", "PERSON"):
             if column in vendor_df.columns:
                 text = _clean_text(row.get(column))
                 if text:
-                    choices.append((text, row_index))
+                    choices.append((_vendor_match_key(text), row_index, text))
 
+    query_key = _vendor_match_key(raw_vendor_name)
     row_index, best_text, score = _best_match(
-        raw_vendor_name,
-        choices,
+        query_key,
+        [(choice, row_index) for choice, row_index, _ in choices],
         config.FUZZY_MATCH_THRESHOLD,
     )
+    original_best = next((original for choice, _, original in choices if choice == best_text), best_text)
     logging.info("Vendor match query=%r best=%r score=%s", raw_vendor_name, best_text, score)
-    if row_index is None:
+    if row_index is None or not _has_vendor_token_similarity(raw_vendor_name, original_best):
         return "NA", raw_vendor_name
 
     row = vendor_df.loc[row_index]
     person = _clean_text(row.get("PERSON"))
-    return person or "NA", best_text
+    return person or "NA", original_best
 
 
 def get_vendor_person_code_from_text(raw_text: str) -> tuple[str, str]:

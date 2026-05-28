@@ -390,6 +390,7 @@ _KNOWN_LABEL_PATTERNS = (
     r"amount(?:\s+[A-Z]{3})?",
     r"rate",
     r"bedrag",
+    r"prijs",
     r"prijs/\s*eenh\.?",
     r"netto\s+prijs",
     r"korting-\s*bedrag",
@@ -413,6 +414,14 @@ _KNOWN_LABEL_PATTERNS = (
 
 def _amounts_in_text(text: str) -> list[float]:
     return [_safe_float(match.group(0)) for match in _MONEY_PATTERN.finditer(text or "")]
+
+
+def _money_texts_in_text(text: str) -> list[str]:
+    return [match.group(0) for match in _MONEY_PATTERN.finditer(text or "")]
+
+
+def _rate_texts_in_text(text: str) -> list[str]:
+    return re.findall(r"\d{1,2}(?:[,.]\d+)?\s*%|zero\s+rated", text or "", re.IGNORECASE)
 
 
 def _first_date_text(text: str) -> str | None:
@@ -479,7 +488,7 @@ def _raw_invoice_number(lines: list[str]) -> str | None:
         ),
     ) or _value_after_label(lines, r"\binvoice\s*(?:number|no\.?|#)\b|\bfactuurnummer\b|\bnummer\b")
     if value:
-        return value
+        return str(value).strip(" :")
     for line in lines:
         match = re.search(
             r"\bfactuur\s+([A-Z0-9][A-Z0-9 /.-]{3,})\b|"
@@ -601,6 +610,19 @@ def _raw_vendor_name(lines: list[str]) -> str | None:
     return None
 
 
+def _looks_like_vendor_name(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text or text.upper() in {"NA", "UNKNOWN"}:
+        return False
+    if _first_date_text(text) and not re.search(r"[A-Za-z]{3,}", text):
+        return False
+    if re.fullmatch(r"[:\s\d./-]+", text):
+        return False
+    if re.search(r"\b(?:invoice|factuur|date|datum|due|vervaldatum)\b", text, re.IGNORECASE):
+        return False
+    return bool(re.search(r"[A-Za-z]{2,}", text))
+
+
 def _raw_property_name(lines: list[str]) -> str | None:
     for line in lines[:40]:
         match = re.search(
@@ -619,6 +641,10 @@ def _is_money_line(line: str) -> bool:
 
 def _is_quantity_line(line: str) -> bool:
     return bool(re.fullmatch(r"\d+(?:[.,]\d+)?(?:/[A-Za-z]+)?|[A-Za-z]+", line.strip()))
+
+
+def _is_multi_quantity_line(line: str) -> bool:
+    return len(re.findall(r"\d+(?:[.,]\d+)?", line or "")) > 1
 
 
 def _is_item_number(line: str) -> bool:
@@ -678,6 +704,35 @@ def _append_item(
     )
 
 
+def _split_compact_descriptions(description: str) -> list[str]:
+    parts = [
+        part.strip()
+        for part in re.split(r"(?=\b\d{5,6}-\d{3}\s+-)", description or "")
+        if part.strip()
+    ]
+    return parts or [description]
+
+
+def _structured_items_low_quality(items: list[dict[str, Any]]) -> bool:
+    if not items:
+        return True
+    if len(items) > 1:
+        return False
+    item = items[0]
+    description = str(
+        item.get("Description_Dutch")
+        or item.get("Description_English")
+        or item.get("Description")
+        or item.get("Notes")
+        or ""
+    ).strip()
+    return description in {"", "-", "NA"} or not _has_value(item.get("Tax_Amount"))
+
+
+def _has_description_value(value: Any) -> bool:
+    return str(value or "").strip() not in {"", "-", "NA", "UNKNOWN"}
+
+
 def _raw_line_items(lines: list[str]) -> list[dict[str, Any]]:
     start = None
     for index, line in enumerate(lines):
@@ -699,6 +754,19 @@ def _raw_line_items(lines: list[str]) -> list[dict[str, Any]]:
         if stop_words.search(line):
             break
 
+        if _is_multi_quantity_line(line) and description_parts and index + 2 < len(lines):
+            compact_description = " ".join(description_parts)
+            descriptions = _split_compact_descriptions(compact_description)
+            amount_texts = _money_texts_in_text(lines[index + 1])
+            rate_texts = _rate_texts_in_text(" ".join(lines[index + 2 : index + 5]))
+            if len(descriptions) >= 2 and len(descriptions) == len(amount_texts):
+                for item_index, description in enumerate(descriptions):
+                    rate_text = rate_texts[item_index] if item_index < len(rate_texts) else ""
+                    _append_item(rows, [description], amount_texts[item_index], rate_text)
+                description_parts = []
+                index += 5
+                continue
+
         if _is_item_number(line) and index + 7 < len(lines) and _looks_like_sku(lines[index + 1]):
             desc = [lines[index + 2]]
             cursor = index + 3
@@ -717,6 +785,16 @@ def _raw_line_items(lines: list[str]) -> list[dict[str, Any]]:
 
         if _is_quantity_line(line) and description_parts:
             lookahead = lines[index + 1 : index + 6]
+            if (
+                len(lookahead) >= 3
+                and _is_money_line(lookahead[0])
+                and _is_money_line(lookahead[1])
+                and _looks_like_rate(lookahead[2])
+            ):
+                _append_item(rows, description_parts, lookahead[1], lookahead[2])
+                description_parts = []
+                index += 4
+                continue
             if (
                 len(lookahead) >= 4
                 and _is_money_line(lookahead[0])
@@ -781,15 +859,24 @@ def _apply_raw_text_fallbacks(parsed: dict[str, Any], raw_text: str) -> dict[str
             parsed[key] = value
             logging.info("Applied raw OCR fallback for %s.", key)
 
-    if not _has_value(parsed.get("Description_Dutch")):
-        notes = _value_after_label(lines, r"\bnotes?\b")
+    if not _looks_like_vendor_name(parsed.get("Vendor_Name")):
+        fallback_vendor = _raw_vendor_name(lines)
+        parsed["Vendor_Name"] = fallback_vendor if _looks_like_vendor_name(fallback_vendor) else "NA"
+
+    if not _has_description_value(parsed.get("Description_Dutch")):
+        notes = _value_after_label(lines, r"\bnotes?\b|\bonderwerp\b|\bsubject\b")
         parsed["Description_Dutch"] = notes or parsed.get("Description_Dutch") or ""
 
-    if not parsed.get("InvoiceItems"):
-        parsed["InvoiceItems"] = _raw_line_items(lines)
-        if parsed["InvoiceItems"]:
-            logging.info("Parsed %s line item(s) from raw OCR text.", len(parsed["InvoiceItems"]))
-        if not parsed["InvoiceItems"] and _has_value(parsed.get("Amount")):
+    raw_line_items = _raw_line_items(lines)
+    existing_items = parsed.get("InvoiceItems") or []
+    if raw_line_items and _structured_items_low_quality(existing_items):
+        parsed["InvoiceItems"] = raw_line_items
+        logging.info("Parsed %s line item(s) from raw OCR text.", len(parsed["InvoiceItems"]))
+    elif not existing_items:
+        parsed["InvoiceItems"] = raw_line_items
+        if raw_line_items:
+            logging.info("Parsed %s line item(s) from raw OCR text.", len(raw_line_items))
+        if not raw_line_items and _has_value(parsed.get("Amount")):
             parsed["InvoiceItems"] = [
                 {
                     "Description_Dutch": parsed.get("Description_Dutch") or "Invoice total",
@@ -798,6 +885,11 @@ def _apply_raw_text_fallbacks(parsed: dict[str, Any], raw_text: str) -> dict[str
                     "VAT_Rate": parsed.get("VAT_Rate"),
                 }
             ]
+
+    if not _has_description_value(parsed.get("Description_Dutch")) and parsed.get("InvoiceItems"):
+        first_item = parsed["InvoiceItems"][0]
+        if isinstance(first_item, dict):
+            parsed["Description_Dutch"] = first_item.get("Description_Dutch") or parsed.get("Description_Dutch") or ""
 
     line_tax_sum = sum(
         _safe_float(item.get("Tax_Amount"))

@@ -289,7 +289,10 @@ def _extract_vat_rate(value: Any) -> float | None:
 
 
 def _normalise_mapping_key(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+    text = str(value or "").lower().replace("netherlands", "netherland")
+    tokens = re.findall(r"[a-z0-9]+", text)
+    tokens = [token for token in tokens if token not in {"b", "bv", "c", "cv", "gp", "v"}]
+    return "".join(tokens)
 
 
 def _code_matches(property_code: str, mapping_code: str) -> bool:
