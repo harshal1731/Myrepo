@@ -1,11 +1,12 @@
 from typing import Optional
 
 from fastapi import APIRouter, File, UploadFile, HTTPException
+from fastapi.responses import JSONResponse
 import logging
-from app.models.schemas import YardiResponse, MasterDataPayload
+from app.models.schemas import InvoiceStatusResponse, MasterDataPayload, YardiResponse
 from app.services.ocr_service import AzureOcrError, extract_invoice_data_from_memory
 from app.services.translation import translate_dutch_to_english
-from app.services.mapper_service import generate_yardi_payload
+from app.services.mapper_service import generate_yardi_payload, get_invoice_status_response
 
 from app.services.excel_service import (
     load_master_data_from_json,
@@ -15,10 +16,17 @@ from app.services.excel_service import (
 router = APIRouter()
 
 
-def _payload_dict(payload: MasterDataPayload) -> dict:
+def _payload_dict(payload) -> dict:
     if hasattr(payload, "model_dump"):
         return payload.model_dump()
     return payload.dict()
+
+
+def _error_response(message: str, *, status_code: int = 400) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": False, "message": message, "loaded": {}},
+    )
 
 
 def _validate_extension(file: UploadFile, allowed: tuple[str, ...], label: str) -> None:
@@ -34,14 +42,18 @@ async def update_master_data(payload: MasterDataPayload):
     try:
         result = load_master_data_from_json(_payload_dict(payload))
         return {
+            "status": True,
             "message": "Master data (Vendors & Properties) loaded into RAM successfully.",
-            "loaded": result,
+            "loaded": {
+                "vendorsCount": result.get("vendors", 0),
+                "propertiesCount": result.get("properties", 0),
+            },
         }
     except HTTPException:
         raise
     except Exception as e:
         logging.error(f"JSON RAM Load Error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to process JSON into RAM: {str(e)}")
+        return _error_response(f"Failed to process JSON into RAM: {str(e)}", status_code=400)
 
 # --- ENDPOINT 2: Excel Expense Report ---
 @router.post("/api/upload-expense-report")
@@ -51,6 +63,7 @@ async def upload_expense_report(
     """Receives optional Expense Distribution Excel file and stores it in Pandas RAM."""
     if expense_file is None:
         return {
+            "status": False,
             "message": "No expense_file supplied. Existing in-memory expense data was unchanged.",
             "loaded": {},
         }
@@ -60,20 +73,25 @@ async def upload_expense_report(
 
         _validate_extension(expense_file, (".xls", ".xlsx"), "Expense file")
         expense_bytes = await expense_file.read()
-        loaded["expense_file"] = load_expense_report_from_memory(expense_bytes)
+        expense_result = load_expense_report_from_memory(expense_bytes)
+        loaded["expense_file"] = {
+            "rows_processed": expense_result.get("rows", 0),
+            "status": True,
+        }
 
         return {
+            "status": True,
             "message": "Uploaded Excel data loaded into RAM successfully.",
             "loaded": loaded,
         }
-    except HTTPException:
-        raise
+    except HTTPException as e:
+        return _error_response(str(e.detail), status_code=e.status_code)
     except ValueError as e:
         logging.error(f"Excel validation error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        return _error_response(str(e), status_code=400)
     except Exception as e:
         logging.error(f"Excel RAM Upload Error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to process Excel into RAM: {str(e)}")
+        return _error_response(f"Failed to process Excel into RAM: {str(e)}", status_code=500)
 
 @router.post("/api/process-invoice", response_model=YardiResponse)
 async def process_invoice(file: UploadFile = File(...)):
@@ -98,7 +116,7 @@ async def process_invoice(file: UploadFile = File(...)):
         logging.info(f"Translated Description: {english_desc}")
         
         final_payload = generate_yardi_payload(ocr_data, file.filename)
-        logging.info(f"Final Status: {final_payload['status']}")
+        logging.info(f"Final Status: {final_payload['InvoiceStatus']}")
         
         return final_payload
     except HTTPException:
@@ -109,3 +127,32 @@ async def process_invoice(file: UploadFile = File(...)):
     except Exception as e:
         logging.error(f"Error on {file.filename}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/update-invoice", response_model=InvoiceStatusResponse)
+async def update_invoice(payload: YardiResponse):
+    """
+    Validates a user-edited invoice payload from the UI.
+
+    The .NET/UI layer should send the same JSON shape returned by
+    /api/process-invoice. This endpoint does not re-run OCR; it only checks
+    whether the edited ETL data now satisfies the posting rules.
+    """
+    try:
+        payload_dict = _payload_dict(payload)
+        etl_data = payload_dict.get("etl_data", {})
+        status_info = get_invoice_status_response(etl_data)
+        logging.info(
+            "Updated invoice validation file=%r status=%s message=%r",
+            payload_dict.get("vendor_file_name"),
+            status_info["InvoiceStatus"],
+            status_info["message"],
+        )
+        return status_info
+    except Exception as e:
+        logging.error(f"Update invoice validation error: {e}")
+        return {
+            "InvoiceStatus": "Review",
+            "status": False,
+            "message": f"Failed to validate updated invoice: {str(e)}",
+        }
