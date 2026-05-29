@@ -1,0 +1,126 @@
+
+1. 
+Endpoint Name : /api/update-master-data
+HTTP Method: POST
+Content-Type: application/json
+Input (Request Body - Rough Schema):
+
+{
+  "vendors": [
+    {
+      "vendorId": "VND101",
+      "vendorName": "Example Vendor BV"
+    }
+  ],
+  "properties": [
+    {
+      "propertyId": "PROP902",
+      "propertyName": "Amsterdam Office Suite"
+    }
+  ]
+}
+
+Output (Response Body - Rough Schema):
+{ 
+  "status" : True/False based on upload json file
+  "message": "Master data (Vendors & Properties) loaded into RAM successfully.",
+  "loaded": {
+    "vendorsCount": 1,
+    "propertiesCount": 1
+  }
+}
+
+
+2. 
+Endpoint Name: /api/upload-expense-report
+HTTP Method: POST
+Content-Type: multipart/form-data
+Input (Multipart Form Parameters):
+expense_file (Optional, Binary File. Allowed extensions: .xls, .xlsx)
+Output (Response Body - Rough Schema):
+If file is provided:
+{
+  "message": "Uploaded Excel data loaded into RAM successfully.",
+  "loaded": {
+    "expense_file": {
+      "rows_processed": 120,
+      "status": True
+    }
+  }
+}
+
+If no file is provided:
+{
+  "message": "No expense_file supplied. Existing in-memory expense data was unchanged.",
+  "loaded": {}
+  "status": False 
+}
+
+
+
+3.
+Endpoint Name: /api/process-invoice
+HTTP Method: POST
+Content-Type: multipart/form-data
+Input (Multipart Form Parameters):
+file (Required, Binary File. Allowed extension: .pdf)
+Output (Response Body - Rough Schema of YardiResponse):
+
+  "vendor_file_name": "Factuur_2025-0293.pdf",
+  "InvoiceStatus": "Ready to Post",
+  "status" : True/False based on result,
+  "message": "Vendor,site not available", #if vendor is not present in master or could not find in expense report.   
+  "etl_data": {
+    "PROPERTY": "nlcanvt",
+    "PERSON": "nlsecjva",
+    "OFFSET": "11020000",
+    "DUEDATE": "31/10/2025",
+    "DATE": "01/10/2025",
+    "POSTMONTH": "10/2025",
+    "ACCOUNT": "52190000",
+    "ACCRUAL": "21010000",
+    "REF": "2025-0293",
+    "SEGMENT1": "NA",
+    "SEGMENT2": "NA",
+    "SEGMENT3": "NA",
+    "SEGMENT4": "NA",
+    "SEGMENT5": "NA",
+    "SEGMENT6": "NA",
+    "SEGMENT7": "NA",
+    "SEGMENT8": "NA",
+    "SEGMENT9": "NA",
+    "SEGMENT10": "NA",
+    "SEGMENT11": "NA",
+    "SEGMENT12": "NA",
+    "EXCHANGERATE": "NA",
+    "EXCHANGERATEDATE": "NA",
+    "TAXAMOUNT1": "NA",
+    "TAXAMOUNT2": "NA",
+    "FROMDATE": "01/10/2025",
+    "TODATE": "01/10/2025",
+    "EXPENSETYPE": "Expense (Opex)",
+    "DETAILNOTES": "512 hours of security Canvas Utrecht in September 2025",
+    "DISPLAYTYPE": "NLVatApplicablePayable",
+    "ISCONSOLIDATECHECKS": -1,
+    "DETAILVATTRANTYPEID": "apresex",
+    "DETAILVATRATEID": "Uksr",
+    "INTERNATIONALPAYMENTTYPE": "EFT",
+    "InvoiceItems": [
+      {
+        "TRANNUM": 1,
+        "NOTES": "512 hours of security Canvas Utrecht in September 2025",
+        "AMOUNT": 22528.00,
+        "DETAILTAXAMOUNT1": 4730.88
+      }
+    ]
+  }
+}
+
+
+Also add one endpoint #what it does if user update any field from UI the .net team will give me updated json I just want to verify with existing one if it match it should go to ready to post otherwise review and display the status wheather it should go to ready to post or review that's it.
+update-invoice
+ 
+input - same as you return in process invoice 
+output - InvoiceStatus , status , message
+
+
