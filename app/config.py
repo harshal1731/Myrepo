@@ -20,7 +20,7 @@ AZURE_ENDPOINT = os.getenv(
     "AZURE_ENDPOINT",
     "https://greystarinvociedataextractionuk.cognitiveservices.azure.com/",
 ).rstrip("/") + "/"
-AZURE_KEY = os.getenv("AZURE_KEY", "")
+AZURE_KEY = "Bbatcj2ePCYZ6zdz5nnCIL3WsIfeZ9eyCQdOuAFolzvRo53R6X0dJQQJ99CAACmepeSXJ3w3AAALACOGhqPJ"
 AZURE_MODEL_NAME = os.getenv("AZURE_MODEL_NAME", "Greystar_common_logic_UK_v.1.3")
 AZURE_FALLBACK_MODEL_NAME = os.getenv("AZURE_FALLBACK_MODEL_NAME", "").strip()
 AZURE_API_VERSION = os.getenv("AZURE_API_VERSION", "2024-11-30")
