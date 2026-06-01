@@ -54,6 +54,7 @@ _DATA_LOCK = threading.RLock()
 
 _VENDOR_COLUMNS = {
     "Vendor name": [
+        "vendorName",
         "TradingName",
         "Trading Name",
         "Vendor Name",
@@ -63,6 +64,7 @@ _VENDOR_COLUMNS = {
         "Supplier Name",
     ],
     "PERSON": [
+        "vendorId",
         "RegisteredName",
         "Registered Name",
         "PERSON",
@@ -76,6 +78,7 @@ _VENDOR_COLUMNS = {
 
 _PROPERTY_COLUMNS = {
     "Yardi code": [
+        "propertyId",
         "SiteCode",
         "Site Code",
         "Yardi Code",
@@ -84,6 +87,7 @@ _PROPERTY_COLUMNS = {
         "Property Code",
     ],
     "Property name": [
+        "propertyName",
         "PropertyName1",
         "Property Name 1",
         "Property name",

@@ -21,6 +21,7 @@ YARDI_HEADER_FIELD_NAMES = [
     "DUEDATE",
     "DATE",
     "POSTMONTH",
+    "ACCOUNT",
     "ACCRUAL",
     "REF",
     "SEGMENT1",
@@ -423,6 +424,49 @@ def _status(etl_data: dict[str, Any]) -> str:
     return "Review" if _review_reasons(etl_data) else "Ready to Post"
 
 
+def _invoice_status(reasons: list[str]) -> str:
+    return "Review" if reasons else "Ready to Post"
+
+
+def _message_from_review_reasons(reasons: list[str]) -> str:
+    if not reasons:
+        return "Ready to Post"
+
+    messages: list[str] = []
+    if "PERSON" in reasons:
+        messages.append("Vendor not available")
+    if "PROPERTY" in reasons:
+        messages.append("Site/property not available")
+    if "OFFSET" in reasons:
+        messages.append("Offset account not available")
+    if "REF" in reasons:
+        messages.append("Invoice reference not available")
+    if "InvoiceItems" in reasons:
+        messages.append("Invoice line items not available")
+    if any(reason.endswith(".ACCOUNT") for reason in reasons):
+        messages.append("Expense account not available")
+    if any(reason.endswith(".AMOUNT") for reason in reasons):
+        messages.append("Amount not available")
+    if any(reason.endswith(".DETAILTAXAMOUNT1") for reason in reasons):
+        messages.append("Tax amount not available")
+
+    return ", ".join(dict.fromkeys(messages)) or "Invoice requires review"
+
+
+def get_invoice_review_reasons(etl_data: dict[str, Any]) -> list[str]:
+    return _review_reasons(etl_data)
+
+
+def get_invoice_status_response(etl_data: dict[str, Any]) -> dict[str, Any]:
+    reasons = _review_reasons(etl_data)
+    invoice_status = _invoice_status(reasons)
+    return {
+        "InvoiceStatus": invoice_status,
+        "status": invoice_status == "Ready to Post",
+        "message": _message_from_review_reasons(reasons),
+    }
+
+
 def _review_reasons(etl_data: dict[str, Any]) -> list[str]:
     reasons: list[str] = []
     if any(_is_missing(etl_data.get(field)) for field in ("PROPERTY", "PERSON", "OFFSET", "REF")):
@@ -449,6 +493,20 @@ def _review_reasons(etl_data: dict[str, Any]) -> list[str]:
             reasons.append(f"InvoiceItems[{index}].DETAILTAXAMOUNT1")
 
     return reasons
+
+
+def _header_account(invoice_items: list[dict[str, Any]]) -> str:
+    accounts = [
+        _text_or_na(item.get("ACCOUNT"))
+        for item in invoice_items
+        if not _is_missing(item.get("ACCOUNT"))
+    ]
+    unique_accounts = list(dict.fromkeys(accounts))
+    if not unique_accounts:
+        return "NA"
+    if len(unique_accounts) == 1:
+        return unique_accounts[0]
+    return "MULTIPLE"
 
 
 def generate_yardi_payload(ocr_data: dict, original_filename: str) -> dict:
@@ -572,6 +630,7 @@ def generate_yardi_payload(ocr_data: dict, original_filename: str) -> dict:
         "DUEDATE": due_date_formatted,
         "DATE": date_formatted,
         "POSTMONTH": post_month,
+        "ACCOUNT": _header_account(invoice_items),
         "ACCRUAL": "21010000",
         "REF": _text_or_na(ocr_data.get("Invoice_Number")),
         "SEGMENT1": "NA",
@@ -608,13 +667,13 @@ def generate_yardi_payload(ocr_data: dict, original_filename: str) -> dict:
         if list(item.keys()) != INVOICE_ITEM_FIELD_NAMES:
             raise RuntimeError("Yardi line item field contract mismatch.")
 
-    status = _status(etl_data)
     review_reasons = _review_reasons(etl_data)
+    status_info = get_invoice_status_response(etl_data)
     logging.info(
         "Yardi mapping summary file=%r status=%s property=%s person=%s offset=%s "
         "line_count=%s review_reasons=%s",
         original_filename,
-        status,
+        status_info["InvoiceStatus"],
         etl_data["PROPERTY"],
         etl_data["PERSON"],
         etl_data["OFFSET"],
@@ -624,6 +683,6 @@ def generate_yardi_payload(ocr_data: dict, original_filename: str) -> dict:
 
     return {
         "vendor_file_name": f"{original_filename} - {matched_vendor if person_code != 'NA' else raw_vendor_name}",
-        "status": status,
+        **status_info,
         "etl_data": etl_data,
     }

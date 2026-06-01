@@ -4,7 +4,7 @@ from typing import Any, List, Union
 
 class InvoiceItem(BaseModel):
     TRANNUM: int
-    ACCOUNT: str
+    ACCOUNT: str = "NA"
     NOTES: str
     AMOUNT: Union[float, str]
     DETAILTAXAMOUNT1: Union[float, str]
@@ -17,6 +17,7 @@ class YardiEtlData(BaseModel):
     DUEDATE: str
     DATE: str
     POSTMONTH: str
+    ACCOUNT: str = "NA"
     ACCRUAL: str
     REF: str
     SEGMENT1: str
@@ -49,8 +50,16 @@ class YardiEtlData(BaseModel):
 
 class YardiResponse(BaseModel):
     vendor_file_name: str
-    status: str
+    InvoiceStatus: str
+    status: bool
+    message: str
     etl_data: YardiEtlData
+
+
+class InvoiceStatusResponse(BaseModel):
+    InvoiceStatus: str
+    status: bool
+    message: str
 
 # New schemas for the JSON Master Data payload from .NET
 class MasterDataPayload(BaseModel):
