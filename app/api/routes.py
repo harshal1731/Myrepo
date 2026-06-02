@@ -1,8 +1,9 @@
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, Header, UploadFile, HTTPException
+from fastapi import APIRouter, File, Form, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 import logging
+import time
 from app.models.schemas import InvoiceStatusResponse, MasterDataPayload, YardiResponse
 from app.services.ocr_service import AzureOcrError, extract_invoice_data_from_memory
 from app.services.translation import translate_dutch_to_english
@@ -96,37 +97,76 @@ async def upload_expense_report(
 @router.post("/api/process-invoice", response_model=YardiResponse)
 async def process_invoice(
     file: UploadFile = File(...),
-    azure_ocr_key: Optional[str] = Form(default=None, alias="azure-ocr-key"),
-    azure_ocr_key_header: Optional[str] = Header(default=None, alias="azure-ocr-key"),
+    azure_ocr_key: str = Form(..., alias="azure-ocr-key"),
 ):
     """Orchestrates OCR, Translation, and Formatting for Vendor Invoice"""
     if not (file.filename or "").lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Must be PDF")
+    request_azure_key = azure_ocr_key.strip()
+    if not request_azure_key:
+        raise HTTPException(status_code=400, detail="azure-ocr-key form field is required")
         
     try:
+        request_started = time.perf_counter()
         pdf_bytes = await file.read()
-        request_azure_key = (azure_ocr_key or "").strip() or (
-            azure_ocr_key_header or ""
-        ).strip()
+
+        ocr_started = time.perf_counter()
         ocr_data = extract_invoice_data_from_memory(
             pdf_bytes,
             azure_key=request_azure_key,
         )
+        ocr_seconds = time.perf_counter() - ocr_started
+        logging.info(
+            "Azure OCR completed file=%r model=%s elapsed=%.2fs",
+            file.filename,
+            ocr_data.get("Azure_Model", "unknown"),
+            ocr_seconds,
+        )
         
+        translation_started = time.perf_counter()
+        translation_cache: dict[str, str] = {}
+
+        def translate_once(text: str) -> str:
+            clean_text = str(text or "").strip()
+            if not clean_text:
+                return ""
+            if clean_text not in translation_cache:
+                translation_cache[clean_text] = translate_dutch_to_english(clean_text)
+            return translation_cache[clean_text]
+
         logging.info("Starting Translation...")
-        english_desc = translate_dutch_to_english(ocr_data.get("Description_Dutch", ""))
+        english_desc = translate_once(ocr_data.get("Description_Dutch", ""))
         ocr_data["Description_English"] = english_desc
         for item in ocr_data.get("InvoiceItems", []) or []:
             if not isinstance(item, dict):
                 continue
             item_desc = item.get("Description_Dutch") or item.get("Description") or ""
             item["Description_English"] = (
-                translate_dutch_to_english(item_desc) if item_desc else english_desc
+                translate_once(item_desc) if item_desc else english_desc
             )
+        translation_seconds = time.perf_counter() - translation_started
         logging.info(f"Translated Description: {english_desc}")
+        logging.info(
+            "Translation completed file=%r unique_texts=%s elapsed=%.2fs",
+            file.filename,
+            len(translation_cache),
+            translation_seconds,
+        )
         
+        mapping_started = time.perf_counter()
         final_payload = generate_yardi_payload(ocr_data, file.filename)
+        mapping_seconds = time.perf_counter() - mapping_started
+        total_seconds = time.perf_counter() - request_started
         logging.info(f"Final Status: {final_payload['InvoiceStatus']}")
+        logging.info(
+            "Process invoice completed file=%r status=%s total=%.2fs ocr=%.2fs translation=%.2fs mapping=%.2fs",
+            file.filename,
+            final_payload["InvoiceStatus"],
+            total_seconds,
+            ocr_seconds,
+            translation_seconds,
+            mapping_seconds,
+        )
         
         return final_payload
     except HTTPException:

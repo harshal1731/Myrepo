@@ -54,11 +54,11 @@ def extract_invoice_data_from_memory(pdf_bytes: bytes, azure_key: str | None = N
 
 
 def _resolve_azure_key(azure_key: str | None = None) -> str:
-    key = (azure_key or config.AZURE_KEY or "").strip()
+    key = str(azure_key).strip() if azure_key is not None else (config.AZURE_KEY or "").strip()
     if not key:
         raise AzureOcrError(
-            "Azure OCR key was not provided. Pass azure-ocr-key with the "
-            "process-invoice request or configure AZURE_KEY."
+            "Azure OCR key was not provided. Pass azure-ocr-key as a "
+            "multipart form field with the process-invoice request."
         )
     return key
 
@@ -84,6 +84,7 @@ def _has_minimum_invoice_fields(parsed: dict) -> bool:
 
 
 def _analyze_with_model(pdf_bytes: bytes, model_name: str, azure_key: str) -> dict:
+    model_started = time.perf_counter()
     payload = {"base64Source": base64.b64encode(pdf_bytes).decode("utf-8")}
     headers = {
         "Content-Type": "application/json",
@@ -99,6 +100,7 @@ def _analyze_with_model(pdf_bytes: bytes, model_name: str, azure_key: str) -> di
     )
 
     logging.info("Calling Azure model: %s", model_name)
+    submit_started = time.perf_counter()
     try:
         response = requests.post(
             post_url,
@@ -109,9 +111,16 @@ def _analyze_with_model(pdf_bytes: bytes, model_name: str, azure_key: str) -> di
         )
     except requests.RequestException as exc:
         raise AzureOcrError(f"Azure OCR request failed: {exc}") from exc
+    submit_seconds = time.perf_counter() - submit_started
 
     if response.status_code != 202:
         retryable = response.status_code not in {401, 403}
+        logging.warning(
+            "Azure model %s submit failed status=%s elapsed=%.2fs",
+            model_name,
+            response.status_code,
+            submit_seconds,
+        )
         raise AzureOcrError(
             f"Azure API Error {response.status_code}: {response.text}",
             retryable=retryable,
@@ -135,8 +144,12 @@ def _analyze_with_model(pdf_bytes: bytes, model_name: str, azure_key: str) -> di
         )
 
     deadline = time.monotonic() + config.AZURE_POLL_TIMEOUT_SECONDS
+    poll_started = time.perf_counter()
+    poll_count = 0
     while time.monotonic() < deadline:
-        time.sleep(config.AZURE_POLL_INTERVAL_SECONDS)
+        if poll_count:
+            time.sleep(config.AZURE_POLL_INTERVAL_SECONDS)
+        poll_count += 1
         try:
             poll_response = requests.get(
                 get_url,
@@ -154,13 +167,37 @@ def _analyze_with_model(pdf_bytes: bytes, model_name: str, azure_key: str) -> di
         status = str(result.get("status", "")).lower()
         logging.info("Azure OCR status for %s: %s", model_name, status or "unknown")
         if status == "succeeded":
+            poll_seconds = time.perf_counter() - poll_started
+            total_seconds = time.perf_counter() - model_started
+            logging.info(
+                "Azure model %s completed total=%.2fs submit=%.2fs poll=%.2fs poll_count=%s",
+                model_name,
+                total_seconds,
+                submit_seconds,
+                poll_seconds,
+                poll_count,
+            )
             return result
         if status == "failed":
+            total_seconds = time.perf_counter() - model_started
+            logging.warning(
+                "Azure model %s failed after %.2fs poll_count=%s",
+                model_name,
+                total_seconds,
+                poll_count,
+            )
             raise AzureOcrError(
                 f"Azure OCR processing failed: {result.get('error', result)}",
                 retryable=True,
             )
 
+    total_seconds = time.perf_counter() - model_started
+    logging.warning(
+        "Azure model %s timed out after %.2fs poll_count=%s",
+        model_name,
+        total_seconds,
+        poll_count,
+    )
     raise AzureOcrError("Azure OCR polling timed out.", retryable=True)
 
 
