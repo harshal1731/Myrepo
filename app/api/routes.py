@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, File, UploadFile, HTTPException
+from fastapi import APIRouter, File, Form, Header, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 import logging
 from app.models.schemas import InvoiceStatusResponse, MasterDataPayload, YardiResponse
@@ -94,14 +94,24 @@ async def upload_expense_report(
         return _error_response(f"Failed to process Excel into RAM: {str(e)}", status_code=500)
 
 @router.post("/api/process-invoice", response_model=YardiResponse)
-async def process_invoice(file: UploadFile = File(...)):
+async def process_invoice(
+    file: UploadFile = File(...),
+    azure_ocr_key: Optional[str] = Form(default=None, alias="azure-ocr-key"),
+    azure_ocr_key_header: Optional[str] = Header(default=None, alias="azure-ocr-key"),
+):
     """Orchestrates OCR, Translation, and Formatting for Vendor Invoice"""
     if not (file.filename or "").lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Must be PDF")
         
     try:
         pdf_bytes = await file.read()
-        ocr_data = extract_invoice_data_from_memory(pdf_bytes)
+        request_azure_key = (azure_ocr_key or "").strip() or (
+            azure_ocr_key_header or ""
+        ).strip()
+        ocr_data = extract_invoice_data_from_memory(
+            pdf_bytes,
+            azure_key=request_azure_key,
+        )
         
         logging.info("Starting Translation...")
         english_desc = translate_dutch_to_english(ocr_data.get("Description_Dutch", ""))

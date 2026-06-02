@@ -15,11 +15,11 @@ class AzureOcrError(RuntimeError):
         self.retryable = retryable
 
 
-def extract_invoice_data_from_memory(pdf_bytes: bytes) -> dict:
+def extract_invoice_data_from_memory(pdf_bytes: bytes, azure_key: str | None = None) -> dict:
     if not pdf_bytes:
         raise AzureOcrError("PDF upload is empty.")
-    if not config.AZURE_KEY:
-        raise AzureOcrError("AZURE_KEY environment variable is not configured.")
+
+    subscription_key = _resolve_azure_key(azure_key)
 
     model_names = [
         name
@@ -31,7 +31,7 @@ def extract_invoice_data_from_memory(pdf_bytes: bytes) -> dict:
 
     for index, model_name in enumerate(model_names):
         try:
-            result = _analyze_with_model(pdf_bytes, model_name)
+            result = _analyze_with_model(pdf_bytes, model_name, subscription_key)
             parsed = parse_azure_response(result)
             if (
                 model_name != config.AZURE_FALLBACK_MODEL_NAME
@@ -51,6 +51,16 @@ def extract_invoice_data_from_memory(pdf_bytes: bytes) -> dict:
             logging.warning("Azure model %s failed; falling back. Error: %s", model_name, exc)
 
     raise AzureOcrError("Azure OCR did not run.")
+
+
+def _resolve_azure_key(azure_key: str | None = None) -> str:
+    key = (azure_key or config.AZURE_KEY or "").strip()
+    if not key:
+        raise AzureOcrError(
+            "Azure OCR key was not provided. Pass azure-ocr-key with the "
+            "process-invoice request or configure AZURE_KEY."
+        )
+    return key
 
 
 def _has_minimum_invoice_fields(parsed: dict) -> bool:
@@ -73,11 +83,11 @@ def _has_minimum_invoice_fields(parsed: dict) -> bool:
     return populated >= 3 and has_line_amount
 
 
-def _analyze_with_model(pdf_bytes: bytes, model_name: str) -> dict:
+def _analyze_with_model(pdf_bytes: bytes, model_name: str, azure_key: str) -> dict:
     payload = {"base64Source": base64.b64encode(pdf_bytes).decode("utf-8")}
     headers = {
         "Content-Type": "application/json",
-        "Ocp-Apim-Subscription-Key": config.AZURE_KEY,
+        "Ocp-Apim-Subscription-Key": azure_key,
     }
     params = {
         "api-version": config.AZURE_API_VERSION,
