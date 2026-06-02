@@ -1,7 +1,9 @@
 import logging
 import re
 import threading
+import time
 from contextlib import nullcontext
+from functools import lru_cache
 
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
@@ -137,10 +139,16 @@ def _load_model() -> bool:
             return True
         try:
             logging.info("Loading NLLB translation model: %s", NLLB_MODEL_NAME)
+            load_started = time.perf_counter()
             _tokenizer = AutoTokenizer.from_pretrained(NLLB_MODEL_NAME)
             _model = AutoModelForSeq2SeqLM.from_pretrained(NLLB_MODEL_NAME)
+            _model.eval()
             if hasattr(_tokenizer, "src_lang"):
                 _tokenizer.src_lang = "nld_Latn"
+            logging.info(
+                "Loaded NLLB translation model in %.2fs",
+                time.perf_counter() - load_started,
+            )
             return True
         except Exception as exc:
             _load_failed = True
@@ -159,12 +167,18 @@ def translate_dutch_to_english(dutch_text: str) -> str:
     text = str(dutch_text or "").strip()
     if not text:
         return ""
+    return _translate_dutch_to_english_cached(text)
+
+
+@lru_cache(maxsize=512)
+def _translate_dutch_to_english_cached(text: str) -> str:
     if not _looks_like_dutch_invoice_text(text):
         return text
     if not _load_model():
         return _glossary_translate(text)
 
     try:
+        translation_started = time.perf_counter()
         if hasattr(_tokenizer, "src_lang"):
             _tokenizer.src_lang = "nld_Latn"
         inputs = _tokenizer(
@@ -173,14 +187,24 @@ def translate_dutch_to_english(dutch_text: str) -> str:
             truncation=True,
             max_length=512,
         )
-        context = torch.no_grad() if torch is not None else nullcontext()
+        if torch is not None and hasattr(torch, "inference_mode"):
+            context = torch.inference_mode()
+        else:
+            context = torch.no_grad() if torch is not None else nullcontext()
         with context:
             translated_tokens = _model.generate(
                 **inputs,
                 forced_bos_token_id=_english_token_id(),
-                max_length=256,
+                max_new_tokens=max(32, min(128, len(text.split()) * 3 + 16)),
+                num_beams=1,
+                do_sample=False,
             )
         translated = _tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
+        logging.info(
+            "NLLB translation completed chars=%s elapsed=%.2fs",
+            len(text),
+            time.perf_counter() - translation_started,
+        )
         if _looks_hallucinated(text, translated):
             fallback = _glossary_translate(text)
             logging.warning("Rejected hallucinated invoice translation. source=%r translated=%r", text, translated)
