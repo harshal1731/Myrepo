@@ -147,7 +147,13 @@ Multipart form parameter:
 
 ```text
 file: required .pdf file
+azure-ocr-key: optional Azure Document Intelligence key
 ```
+
+`azure-ocr-key` can be sent as either a multipart form field or an HTTP header.
+When it is provided, it is used for the Azure OCR call. If it is omitted, the
+service falls back to the configured `AZURE_KEY` value for backward
+compatibility.
 
 Response rough schema:
 
@@ -253,6 +259,8 @@ If a required field is still missing:
 
 1. PDF bytes are base64 encoded in memory.
 2. Azure Document Intelligence is called using `AZURE_MODEL_NAME`.
+   The request-level `azure-ocr-key` is used when present; otherwise `AZURE_KEY`
+   is used as a fallback.
 3. `AZURE_FALLBACK_MODEL_NAME` is optional and only used when set.
 4. The parser reads structured fields from Azure.
 5. Raw OCR text fallbacks fill missing or poorly structured fields.
@@ -367,6 +375,7 @@ Create `.env` in the project root:
 
 ```text
 AZURE_ENDPOINT=https://<your-resource>.cognitiveservices.azure.com/
+# Optional fallback. /api/process-invoice can also receive azure-ocr-key per request.
 AZURE_KEY=<your-azure-key>
 AZURE_MODEL_NAME=Greystar_common_logic_UK_v.1.3
 
