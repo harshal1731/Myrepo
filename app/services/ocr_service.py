@@ -20,6 +20,7 @@ def extract_invoice_data_from_memory(pdf_bytes: bytes, azure_key: str | None = N
         raise AzureOcrError("PDF upload is empty.")
 
     subscription_key = _resolve_azure_key(azure_key)
+    # print("subcription key is ", subscription_key)
 
     model_names = [
         name
@@ -54,7 +55,10 @@ def extract_invoice_data_from_memory(pdf_bytes: bytes, azure_key: str | None = N
 
 
 def _resolve_azure_key(azure_key: str | None = None) -> str:
+    
+    
     key = (azure_key or config.AZURE_KEY or "").strip()
+    # print("key is: ", key)
     if not key:
         raise AzureOcrError(
             "Azure OCR key was not provided. Pass azure-ocr-key with the "

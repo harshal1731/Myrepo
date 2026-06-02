@@ -108,6 +108,7 @@ async def process_invoice(
         request_azure_key = (azure_ocr_key or "").strip() or (
             azure_ocr_key_header or ""
         ).strip()
+        # print("request_azure_key is ", request_azure_key)
         ocr_data = extract_invoice_data_from_memory(
             pdf_bytes,
             azure_key=request_azure_key,
