@@ -148,10 +148,11 @@ Multipart form parameter:
 ```text
 file: required .pdf file
 azure-ocr-key: required Azure Document Intelligence key
+azure_url: required Azure Document Intelligence endpoint URL
 ```
 
-`azure-ocr-key` must be sent as a multipart form field. The API does not read
-the key from request headers.
+`azure-ocr-key` and `azure_url` must be sent as multipart form fields. The API
+does not read Azure credentials from request headers.
 
 Response rough schema:
 
@@ -171,22 +172,22 @@ Response rough schema:
     "ACCOUNT": "52190000",
     "ACCRUAL": "21010000",
     "REF": "2025-0293",
-    "SEGMENT1": "NA",
-    "SEGMENT2": "NA",
-    "SEGMENT3": "NA",
-    "SEGMENT4": "NA",
-    "SEGMENT5": "NA",
-    "SEGMENT6": "NA",
-    "SEGMENT7": "NA",
-    "SEGMENT8": "NA",
-    "SEGMENT9": "NA",
-    "SEGMENT10": "NA",
-    "SEGMENT11": "NA",
-    "SEGMENT12": "NA",
-    "EXCHANGERATE": "NA",
-    "EXCHANGERATEDATE": "NA",
-    "TAXAMOUNT1": "NA",
-    "TAXAMOUNT2": "NA",
+    "SEGMENT1": "None",
+    "SEGMENT2": "None",
+    "SEGMENT3": "None",
+    "SEGMENT4": "None",
+    "SEGMENT5": "None",
+    "SEGMENT6": "None",
+    "SEGMENT7": "None",
+    "SEGMENT8": "None",
+    "SEGMENT9": "None",
+    "SEGMENT10": "None",
+    "SEGMENT11": "None",
+    "SEGMENT12": "None",
+    "EXCHANGERATE": "None",
+    "EXCHANGERATEDATE": "None",
+    "TAXAMOUNT1": "None",
+    "TAXAMOUNT2": "None",
     "FROMDATE": "01/10/2025",
     "TODATE": "01/10/2025",
     "EXPENSETYPE": "Expense (Opex)",
@@ -257,7 +258,8 @@ If a required field is still missing:
 
 1. PDF bytes are base64 encoded in memory.
 2. Azure Document Intelligence is called using `AZURE_MODEL_NAME`.
-   The request-level `azure-ocr-key` form field is used for this call.
+   The request-level `azure-ocr-key` and `azure_url` form fields are used for
+   this call.
 3. `AZURE_FALLBACK_MODEL_NAME` is optional and only used when set.
 4. The parser reads structured fields from Azure.
 5. Raw OCR text fallbacks fill missing or poorly structured fields.
@@ -321,7 +323,10 @@ If something is missing:
 }
 ```
 
-Default `NA` fields like `SEGMENT1..SEGMENT12`, `EXCHANGERATE`, `EXCHANGERATEDATE`, `TAXAMOUNT1`, and `TAXAMOUNT2` do not trigger Review.
+Unavailable extracted, mapped, or default placeholder ETL values are returned as
+the string `"None"`. Default placeholder fields like `SEGMENT1..SEGMENT12`,
+`EXCHANGERATE`, `EXCHANGERATEDATE`, `TAXAMOUNT1`, and `TAXAMOUNT2` do not
+trigger Review.
 
 ## Example Flow
 
@@ -376,7 +381,7 @@ Create `.env` in the project root:
 
 ```text
 AZURE_ENDPOINT=https://<your-resource>.cognitiveservices.azure.com/
-# /api/process-invoice expects azure-ocr-key as multipart form-data.
+# /api/process-invoice expects azure-ocr-key and azure_url as multipart form-data.
 AZURE_KEY=<optional-local-fallback-key>
 AZURE_MODEL_NAME=Greystar_common_logic_UK_v.1.3
 

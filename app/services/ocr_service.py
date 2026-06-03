@@ -15,11 +15,16 @@ class AzureOcrError(RuntimeError):
         self.retryable = retryable
 
 
-def extract_invoice_data_from_memory(pdf_bytes: bytes, azure_key: str | None = None) -> dict:
+def extract_invoice_data_from_memory(
+    pdf_bytes: bytes,
+    azure_key: str | None = None,
+    azure_endpoint: str | None = None,
+) -> dict:
     if not pdf_bytes:
         raise AzureOcrError("PDF upload is empty.")
 
     subscription_key = _resolve_azure_key(azure_key)
+    endpoint = _resolve_azure_endpoint(azure_endpoint)
 
     model_names = [
         name
@@ -31,7 +36,7 @@ def extract_invoice_data_from_memory(pdf_bytes: bytes, azure_key: str | None = N
 
     for index, model_name in enumerate(model_names):
         try:
-            result = _analyze_with_model(pdf_bytes, model_name, subscription_key)
+            result = _analyze_with_model(pdf_bytes, model_name, subscription_key, endpoint)
             parsed = parse_azure_response(result)
             if (
                 model_name != config.AZURE_FALLBACK_MODEL_NAME
@@ -63,6 +68,22 @@ def _resolve_azure_key(azure_key: str | None = None) -> str:
     return key
 
 
+def _resolve_azure_endpoint(azure_endpoint: str | None = None) -> str:
+    endpoint = (
+        str(azure_endpoint).strip()
+        if azure_endpoint is not None
+        else (config.AZURE_ENDPOINT or "").strip()
+    )
+    if not endpoint:
+        raise AzureOcrError(
+            "Azure OCR endpoint URL was not provided. Pass azure_url as a "
+            "multipart form field with the process-invoice request."
+        )
+    if not re.match(r"^https?://", endpoint, re.IGNORECASE):
+        raise AzureOcrError("Azure OCR endpoint URL must start with http:// or https://.")
+    return endpoint.rstrip("/") + "/"
+
+
 def _has_minimum_invoice_fields(parsed: dict) -> bool:
     critical_values = [
         parsed.get("Invoice_Number"),
@@ -83,7 +104,12 @@ def _has_minimum_invoice_fields(parsed: dict) -> bool:
     return populated >= 3 and has_line_amount
 
 
-def _analyze_with_model(pdf_bytes: bytes, model_name: str, azure_key: str) -> dict:
+def _analyze_with_model(
+    pdf_bytes: bytes,
+    model_name: str,
+    azure_key: str,
+    azure_endpoint: str,
+) -> dict:
     model_started = time.perf_counter()
     payload = {"base64Source": base64.b64encode(pdf_bytes).decode("utf-8")}
     headers = {
@@ -95,7 +121,7 @@ def _analyze_with_model(pdf_bytes: bytes, model_name: str, azure_key: str) -> di
         "stringIndexType": "textElements",
     }
     post_url = (
-        f"{config.AZURE_ENDPOINT}documentintelligence/documentModels/"
+        f"{azure_endpoint}documentintelligence/documentModels/"
         f"{model_name}:analyze"
     )
 
@@ -133,7 +159,7 @@ def _analyze_with_model(pdf_bytes: bytes, model_name: str, azure_key: str) -> di
         get_params = None
     elif request_id:
         get_url = (
-            f"{config.AZURE_ENDPOINT}documentintelligence/documentModels/"
+            f"{azure_endpoint}documentintelligence/documentModels/"
             f"{model_name}/analyzeResults/{request_id}"
         )
         get_params = {"api-version": config.AZURE_API_VERSION}
