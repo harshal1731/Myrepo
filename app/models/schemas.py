@@ -1,50 +1,50 @@
 from pydantic import BaseModel
-from typing import Any, List, Union
+from typing import Any, List, Optional, Union
 
 
 class InvoiceItem(BaseModel):
     TRANNUM: int
-    ACCOUNT: str = "NA"
-    NOTES: str
-    AMOUNT: Union[float, str]
-    DETAILTAXAMOUNT1: Union[float, str]
+    ACCOUNT: Optional[str] = None
+    NOTES: Optional[str] = None
+    AMOUNT: Union[float, str, None]
+    DETAILTAXAMOUNT1: Union[float, str, None]
 
 
 class YardiEtlData(BaseModel):
-    PROPERTY: str
-    PERSON: str
-    OFFSET: str
-    DUEDATE: str
-    DATE: str
-    POSTMONTH: str
-    ACCOUNT: str = "NA"
+    PROPERTY: Optional[str]
+    PERSON: Optional[str]
+    OFFSET: Optional[str]
+    DUEDATE: Optional[str]
+    DATE: Optional[str]
+    POSTMONTH: Optional[str]
+    ACCOUNT: Optional[str] = None
     ACCRUAL: str
-    REF: str
-    SEGMENT1: str
-    SEGMENT2: str
-    SEGMENT3: str
-    SEGMENT4: str
-    SEGMENT5: str
-    SEGMENT6: str
-    SEGMENT7: str
-    SEGMENT8: str
-    SEGMENT9: str
-    SEGMENT10: str
-    SEGMENT11: str
-    SEGMENT12: str
-    EXCHANGERATE: str
-    EXCHANGERATEDATE: str
-    TAXAMOUNT1: str
-    TAXAMOUNT2: str
-    FROMDATE: str
-    TODATE: str
+    REF: Optional[str]
+    SEGMENT1: Optional[str]
+    SEGMENT2: Optional[str]
+    SEGMENT3: Optional[str]
+    SEGMENT4: Optional[str]
+    SEGMENT5: Optional[str]
+    SEGMENT6: Optional[str]
+    SEGMENT7: Optional[str]
+    SEGMENT8: Optional[str]
+    SEGMENT9: Optional[str]
+    SEGMENT10: Optional[str]
+    SEGMENT11: Optional[str]
+    SEGMENT12: Optional[str]
+    EXCHANGERATE: Optional[str]
+    EXCHANGERATEDATE: Optional[str]
+    TAXAMOUNT1: Optional[str]
+    TAXAMOUNT2: Optional[str]
+    FROMDATE: Optional[str]
+    TODATE: Optional[str]
     EXPENSETYPE: str
-    DETAILNOTES: str
+    DETAILNOTES: Optional[str]
     DISPLAYTYPE: str
     ISCONSOLIDATECHECKS: int
     DETAILVATTRANTYPEID: str
-    DETAILVATRATEID: str
-    INTERNATIONALPAYMENTTYPE: str
+    DETAILVATRATEID: Optional[str]
+    INTERNATIONALPAYMENTTYPE: Optional[str]
     InvoiceItems: List[InvoiceItem]
 
 

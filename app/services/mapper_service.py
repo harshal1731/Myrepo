@@ -509,6 +509,33 @@ def _header_account(invoice_items: list[dict[str, Any]]) -> str:
     return "MULTIPLE"
 
 
+def _output_unavailable(value: Any) -> Any:
+    return "None" if _is_unavailable(value) else value
+
+
+def _invoice_item_for_response(item: dict[str, Any]) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    for key in INVOICE_ITEM_FIELD_NAMES:
+        value = item.get(key)
+        output[key] = value if key == "TRANNUM" else _output_unavailable(value)
+    return output
+
+
+def _etl_data_for_response(etl_data: dict[str, Any]) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    for key in YARDI_HEADER_FIELD_NAMES:
+        value = etl_data.get(key)
+        if key == "InvoiceItems":
+            output[key] = [
+                _invoice_item_for_response(item)
+                for item in value
+                if isinstance(item, dict)
+            ] if isinstance(value, list) else value
+        else:
+            output[key] = _output_unavailable(value)
+    return output
+
+
 def generate_yardi_payload(ocr_data: dict, original_filename: str) -> dict:
     """Map extracted invoice data to the required nested Yardi response."""
     english_desc = _text_or_na(ocr_data.get("Description_English"))
@@ -669,6 +696,7 @@ def generate_yardi_payload(ocr_data: dict, original_filename: str) -> dict:
 
     review_reasons = _review_reasons(etl_data)
     status_info = get_invoice_status_response(etl_data)
+    response_etl_data = _etl_data_for_response(etl_data)
     logging.info(
         "Yardi mapping summary file=%r status=%s property=%s person=%s offset=%s "
         "line_count=%s review_reasons=%s",
@@ -684,5 +712,5 @@ def generate_yardi_payload(ocr_data: dict, original_filename: str) -> dict:
     return {
         "vendor_file_name": f"{original_filename} - {matched_vendor if person_code != 'NA' else raw_vendor_name}",
         **status_info,
-        "etl_data": etl_data,
+        "etl_data": response_etl_data,
     }

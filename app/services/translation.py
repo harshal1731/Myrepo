@@ -41,6 +41,11 @@ _DUTCH_INVOICE_MARKERS = (
     "zwemband",
 )
 _GLOSSARY_REPLACEMENTS = (
+    (r"\baanpassing\b", "adjustment"),
+    (r"\bplaatsen\b", "installing"),
+    (r"\binclusief\b", "including"),
+    (r"\bkozijn(?:en)?\b", "frame"),
+    (r"\bwand(?:en)?\b", "wall"),
     (r"\buur beveiliging\b", "security hours"),
     (r"\bbeveiliging\b", "security"),
     (r"\bconform\b", "according to"),
@@ -87,6 +92,10 @@ def _glossary_translate(text: str) -> str:
     for pattern, replacement in _GLOSSARY_REPLACEMENTS:
         translated = re.sub(pattern, replacement, translated, flags=re.IGNORECASE)
     return re.sub(r"\s+", " ", translated).strip()
+
+
+def _glossary_changed(source: str, translated: str) -> bool:
+    return translated.casefold() != re.sub(r"\s+", " ", source).strip().casefold()
 
 
 def _informative_tokens(text: str) -> set[str]:
@@ -174,8 +183,12 @@ def translate_dutch_to_english(dutch_text: str) -> str:
 def _translate_dutch_to_english_cached(text: str) -> str:
     if not _looks_like_dutch_invoice_text(text):
         return text
+    glossary_translation = _glossary_translate(text)
+    if _glossary_changed(text, glossary_translation):
+        logging.info("Glossary translation used chars=%s", len(text))
+        return glossary_translation
     if not _load_model():
-        return _glossary_translate(text)
+        return glossary_translation
 
     try:
         translation_started = time.perf_counter()
@@ -195,7 +208,7 @@ def _translate_dutch_to_english_cached(text: str) -> str:
             translated_tokens = _model.generate(
                 **inputs,
                 forced_bos_token_id=_english_token_id(),
-                max_new_tokens=max(32, min(128, len(text.split()) * 3 + 16)),
+                max_length=max(32, min(128, len(text.split()) * 3 + 16)),
                 num_beams=1,
                 do_sample=False,
             )
@@ -206,10 +219,9 @@ def _translate_dutch_to_english_cached(text: str) -> str:
             time.perf_counter() - translation_started,
         )
         if _looks_hallucinated(text, translated):
-            fallback = _glossary_translate(text)
             logging.warning("Rejected hallucinated invoice translation. source=%r translated=%r", text, translated)
-            return fallback
+            return glossary_translation
         return translated
     except Exception as exc:
         logging.error("Translation Error: %s", exc)
-        return _glossary_translate(text)
+        return glossary_translation
