@@ -268,6 +268,10 @@ The service logs OCR timing for each processed invoice, including Azure model
 submit time, poll time, poll count, OCR total time, translation time, mapping
 time, and full request time.
 
+`AZURE_ANALYZE_PAGES` defaults to `1-2` so multi-page PDFs with attachments do
+not force Azure to OCR every page. Set it to an empty value to analyze all pages
+when a vendor format genuinely needs full-document OCR.
+
 The parser is generalized around invoice patterns:
 
 - Label/value blocks.
@@ -389,7 +393,8 @@ AZURE_MODEL_NAME=Greystar_common_logic_UK_v.1.3
 AZURE_FALLBACK_MODEL_NAME=
 
 AZURE_API_VERSION=2024-11-30
-AZURE_POLL_INTERVAL_SECONDS=2
+AZURE_ANALYZE_PAGES=1-2
+AZURE_POLL_INTERVAL_SECONDS=1
 AZURE_POLL_TIMEOUT_SECONDS=120
 
 NLLB_MODEL_NAME=facebook/nllb-200-distilled-600M

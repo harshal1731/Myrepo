@@ -120,12 +120,18 @@ def _analyze_with_model(
         "api-version": config.AZURE_API_VERSION,
         "stringIndexType": "textElements",
     }
+    if config.AZURE_ANALYZE_PAGES:
+        params["pages"] = config.AZURE_ANALYZE_PAGES
     post_url = (
         f"{azure_endpoint}documentintelligence/documentModels/"
         f"{model_name}:analyze"
     )
 
-    logging.info("Calling Azure model: %s", model_name)
+    logging.info(
+        "Calling Azure model: %s pages=%s",
+        model_name,
+        params.get("pages", "all"),
+    )
     submit_started = time.perf_counter()
     try:
         response = requests.post(
