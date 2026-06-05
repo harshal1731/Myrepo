@@ -174,14 +174,27 @@ async def process_invoice(
         )
         
         return final_payload
+    
     except HTTPException:
         raise
     except AzureOcrError as e:
         logging.error(f"Azure OCR error on {file.filename}: {e}")
-        raise HTTPException(status_code=502, detail=str(e))
+        return JSONResponse(
+            status_code=400,  # Or keep as 502, depending on your preferred HTTP status code
+            content={
+                "status": False,
+                "message": str(e)
+            }
+        )
     except Exception as e:
         logging.error(f"Error on {file.filename}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": False,
+                "message": str(e)
+            }
+        )
 
 
 @router.post("/api/update-invoice", response_model=InvoiceStatusResponse)

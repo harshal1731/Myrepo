@@ -510,7 +510,7 @@ def _header_account(invoice_items: list[dict[str, Any]]) -> str:
 
 
 def _output_unavailable(value: Any) -> Any:
-    return "None" if _is_unavailable(value) else value
+    return None if _is_unavailable(value) else value
 
 
 def _invoice_item_for_response(item: dict[str, Any]) -> dict[str, Any]:
