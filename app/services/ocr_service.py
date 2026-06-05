@@ -19,16 +19,18 @@ def extract_invoice_data_from_memory(
     pdf_bytes: bytes,
     azure_key: str | None = None,
     azure_endpoint: str | None = None,
+    azure_model_name: str | None = None,
 ) -> dict:
     if not pdf_bytes:
         raise AzureOcrError("PDF upload is empty.")
 
     subscription_key = _resolve_azure_key(azure_key)
     endpoint = _resolve_azure_endpoint(azure_endpoint)
+    primary_model_name = _resolve_azure_model_name(azure_model_name)
 
     model_names = [
         name
-        for name in (config.AZURE_MODEL_NAME, config.AZURE_FALLBACK_MODEL_NAME)
+        for name in (primary_model_name, config.AZURE_FALLBACK_MODEL_NAME)
         if name
     ]
     model_names = list(dict.fromkeys(model_names))
@@ -82,6 +84,20 @@ def _resolve_azure_endpoint(azure_endpoint: str | None = None) -> str:
     if not re.match(r"^https?://", endpoint, re.IGNORECASE):
         raise AzureOcrError("Azure OCR endpoint URL must start with http:// or https://.")
     return endpoint.rstrip("/") + "/"
+
+
+def _resolve_azure_model_name(azure_model_name: str | None = None) -> str:
+    model_name = (
+        str(azure_model_name).strip()
+        if azure_model_name is not None
+        else (config.AZURE_MODEL_NAME or "").strip()
+    )
+    if not model_name:
+        raise AzureOcrError(
+            "Azure OCR model name was not provided. Pass azure-model-name as a "
+            "multipart form field with the process-invoice request."
+        )
+    return model_name
 
 
 def _has_minimum_invoice_fields(parsed: dict) -> bool:
