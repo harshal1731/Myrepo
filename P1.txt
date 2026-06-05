@@ -1,0 +1,54 @@
+{
+  "vendor_file_name": "6.pdf - NA",
+  "InvoiceStatus": "Review",
+  "status": false,
+  "message": "Vendor not available, Expense account not available",
+  "etl_data": {
+    "PROPERTY": "nlamcsar",
+    "PERSON": null,
+    "OFFSET": "11021-000",
+    "DUEDATE": "09/10/2025",
+    "DATE": "09/09/2025",
+    "POSTMONTH": "09/2025",
+    "ACCOUNT": null,
+    "ACCRUAL": "21010000",
+    "REF": "8251318",
+    "SEGMENT1": null,
+    "SEGMENT2": null,
+    "SEGMENT3": null,
+    "SEGMENT4": null,
+    "SEGMENT5": null,
+    "SEGMENT6": null,
+    "SEGMENT7": null,
+    "SEGMENT8": null,
+    "SEGMENT9": null,
+    "SEGMENT10": null,
+    "SEGMENT11": null,
+    "SEGMENT12": null,
+    "EXCHANGERATE": null,
+    "EXCHANGERATEDATE": null,
+    "TAXAMOUNT1": null,
+    "TAXAMOUNT2": null,
+    "FROMDATE": "09/09/2025",
+    "TODATE": "09/09/2025",
+    "EXPENSETYPE": "Expense (Opex)",
+    "DETAILNOTES": "Buitenruimte ODASE gebouw A",
+    "DISPLAYTYPE": "NLVatApplicablePayable",
+    "ISCONSOLIDATECHECKS": -1,
+    "DETAILVATTRANTYPEID": "apresex",
+    "DETAILVATRATEID": "Uksr",
+    "INTERNATIONALPAYMENTTYPE": "EFT",
+    "InvoiceItems": [
+      {
+        "TRANNUM": 1,
+        "ACCOUNT": null,
+        "NOTES": "Buitenruimte ODASE gebouw A",
+        "AMOUNT": 1257.43,
+        "DETAILTAXAMOUNT1": 218.23
+      }
+    ]
+  }
+}
+
+
+If someone fails to load the master json and hit other 2 endpoints then It should return "Vendor not loaded" in message of ETL response "message": "Vendor not available, Expense account not available", like this  "message": "Vendor not loaded" same for if someone fails to upload expense file it should display message like "ExpenseAccount not loaded" and if he miss both endpoints it should display "Vendor,ExpenseAccount not loaded" and if he load all files and couldn't find vendor name it should return same "message": "Vendor not available, Expense account not available"
