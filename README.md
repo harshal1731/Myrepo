@@ -328,6 +328,21 @@ If something is missing:
 }
 ```
 
+If required lookup data has not been loaded into RAM, the message explains the
+missing data source before normal matching messages are used:
+
+```json
+{ "InvoiceStatus": "Review", "status": false, "message": "Vendor not loaded" }
+```
+
+```json
+{ "InvoiceStatus": "Review", "status": false, "message": "ExpenseAccount not loaded" }
+```
+
+```json
+{ "InvoiceStatus": "Review", "status": false, "message": "Vendor,ExpenseAccount not loaded" }
+```
+
 Unavailable extracted, mapped, or default placeholder ETL values are returned as
 the string `"None"`. Default placeholder fields like `SEGMENT1..SEGMENT12`,
 `EXCHANGERATE`, `EXCHANGERATEDATE`, `TAXAMOUNT1`, and `TAXAMOUNT2` do not

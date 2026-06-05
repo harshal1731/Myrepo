@@ -8,6 +8,7 @@ from dateutil import parser as date_parser
 
 from app.services.excel_service import (
     get_expense_account_match,
+    get_loaded_data_state,
     get_property_match_details,
     get_vendor_person_code,
     get_vendor_person_code_from_text,
@@ -453,17 +454,34 @@ def _message_from_review_reasons(reasons: list[str]) -> str:
     return ", ".join(dict.fromkeys(messages)) or "Invoice requires review"
 
 
+def _message_from_loaded_state(loaded_state: dict[str, bool] | None) -> str:
+    if not loaded_state:
+        return ""
+
+    missing: list[str] = []
+    if not loaded_state.get("vendors", False):
+        missing.append("Vendor")
+    if not loaded_state.get("expenses", False):
+        missing.append("ExpenseAccount")
+
+    return f"{','.join(missing)} not loaded" if missing else ""
+
+
 def get_invoice_review_reasons(etl_data: dict[str, Any]) -> list[str]:
     return _review_reasons(etl_data)
 
 
-def get_invoice_status_response(etl_data: dict[str, Any]) -> dict[str, Any]:
+def get_invoice_status_response(
+    etl_data: dict[str, Any],
+    loaded_state: dict[str, bool] | None = None,
+) -> dict[str, Any]:
     reasons = _review_reasons(etl_data)
-    invoice_status = _invoice_status(reasons)
+    loaded_state_message = _message_from_loaded_state(loaded_state)
+    invoice_status = "Review" if loaded_state_message else _invoice_status(reasons)
     return {
         "InvoiceStatus": invoice_status,
         "status": invoice_status == "Ready to Post",
-        "message": _message_from_review_reasons(reasons),
+        "message": loaded_state_message or _message_from_review_reasons(reasons),
     }
 
 
@@ -695,11 +713,12 @@ def generate_yardi_payload(ocr_data: dict, original_filename: str) -> dict:
             raise RuntimeError("Yardi line item field contract mismatch.")
 
     review_reasons = _review_reasons(etl_data)
-    status_info = get_invoice_status_response(etl_data)
+    loaded_state = get_loaded_data_state()
+    status_info = get_invoice_status_response(etl_data, loaded_state=loaded_state)
     response_etl_data = _etl_data_for_response(etl_data)
     logging.info(
         "Yardi mapping summary file=%r status=%s property=%s person=%s offset=%s "
-        "line_count=%s review_reasons=%s",
+        "line_count=%s review_reasons=%s loaded_state=%s",
         original_filename,
         status_info["InvoiceStatus"],
         etl_data["PROPERTY"],
@@ -707,6 +726,7 @@ def generate_yardi_payload(ocr_data: dict, original_filename: str) -> dict:
         etl_data["OFFSET"],
         len(invoice_items),
         review_reasons,
+        loaded_state,
     )
 
     return {

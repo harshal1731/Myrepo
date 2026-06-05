@@ -122,6 +122,16 @@ _EXPENSE_COLUMNS = {
 }
 
 
+def get_loaded_data_state() -> dict[str, bool]:
+    """Return whether required in-memory lookup tables are currently loaded."""
+    with _DATA_LOCK:
+        return {
+            "vendors": not df_vendor.empty,
+            "properties": not df_master.empty,
+            "expenses": not df_expense.empty,
+        }
+
+
 def _normalise_name(value: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value or "").strip().lower())
 
