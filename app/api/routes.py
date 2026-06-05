@@ -99,6 +99,7 @@ async def process_invoice(
     file: UploadFile = File(...),
     azure_ocr_key: str = Form(..., alias="azure-ocr-key"),
     azure_url: str = Form(..., alias="azure_url"),
+    azure_model_name: str = Form(..., alias="azure-model-name"),
 ):
     """Orchestrates OCR, Translation, and Formatting for Vendor Invoice"""
     if not (file.filename or "").lower().endswith('.pdf'):
@@ -109,6 +110,9 @@ async def process_invoice(
     request_azure_url = azure_url.strip()
     if not request_azure_url:
         raise HTTPException(status_code=400, detail="azure_url form field is required")
+    request_azure_model_name = azure_model_name.strip()
+    if not request_azure_model_name:
+        raise HTTPException(status_code=400, detail="azure-model-name form field is required")
         
     try:
         request_started = time.perf_counter()
@@ -119,6 +123,7 @@ async def process_invoice(
             pdf_bytes,
             azure_key=request_azure_key,
             azure_endpoint=request_azure_url,
+            azure_model_name=request_azure_model_name,
         )
         ocr_seconds = time.perf_counter() - ocr_started
         logging.info(

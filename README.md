@@ -149,10 +149,11 @@ Multipart form parameter:
 file: required .pdf file
 azure-ocr-key: required Azure Document Intelligence key
 azure_url: required Azure Document Intelligence endpoint URL
+azure-model-name: required Azure Document Intelligence model name
 ```
 
-`azure-ocr-key` and `azure_url` must be sent as multipart form fields. The API
-does not read Azure credentials from request headers.
+`azure-ocr-key`, `azure_url`, and `azure-model-name` must be sent as multipart
+form fields. The API does not read Azure credentials from request headers.
 
 Response rough schema:
 
@@ -258,8 +259,8 @@ If a required field is still missing:
 
 1. PDF bytes are base64 encoded in memory.
 2. Azure Document Intelligence is called using `AZURE_MODEL_NAME`.
-   The request-level `azure-ocr-key` and `azure_url` form fields are used for
-   this call.
+   The request-level `azure-ocr-key`, `azure_url`, and `azure-model-name` form
+   fields are used for this call.
 3. `AZURE_FALLBACK_MODEL_NAME` is optional and only used when set.
 4. The parser reads structured fields from Azure.
 5. Raw OCR text fallbacks fill missing or poorly structured fields.
@@ -385,7 +386,7 @@ Create `.env` in the project root:
 
 ```text
 AZURE_ENDPOINT=https://<your-resource>.cognitiveservices.azure.com/
-# /api/process-invoice expects azure-ocr-key and azure_url as multipart form-data.
+# /api/process-invoice expects azure-ocr-key, azure_url, and azure-model-name as multipart form-data.
 AZURE_KEY=<optional-local-fallback-key>
 AZURE_MODEL_NAME=Greystar_common_logic_UK_v.1.3
 
